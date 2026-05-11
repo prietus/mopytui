@@ -37,6 +37,7 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "Syncing project version to $VERSION"
 
+          # 1) Cargo.toml [package] version
           tmp=$(mktemp)
           awk -v v="$VERSION" '
             /^\[/ { in_pkg = ($0 == "[package]") }
@@ -45,8 +46,24 @@ jobs:
           ' Cargo.toml > "$tmp"
           mv "$tmp" Cargo.toml
 
+          # 2) Cargo.lock — the mopytui package entry has its own
+          #    `version = "..."` line. Bumping only Cargo.toml leaves the
+          #    lockfile stale, so `cargo build --locked` refuses to run.
+          tmp=$(mktemp)
+          awk -v v="$VERSION" '
+            /^\[\[package\]\]/ { in_target=0 }
+            in_target && /^version[[:space:]]*=/ {
+              sub(/=.*/, "= \"" v "\"")
+              in_target=0
+            }
+            /^name[[:space:]]*=[[:space:]]*"mopytui"/ { in_target=1 }
+            { print }
+          ' Cargo.lock > "$tmp"
+          mv "$tmp" Cargo.lock
+
           echo "--- patched ---"
           awk '/^\[package\]/{f=1} f && /^version/{print; exit}' Cargo.toml
+          awk '/^\[\[package\]\]/{p=0} /^name = "mopytui"/{p=1} p && /^version/{print; exit}' Cargo.lock
 
       - uses: dtolnay/rust-toolchain@stable
         with:
