@@ -1,0 +1,169 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            asset_name: mopytui-linux-x86_64
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            asset_name: mopytui-macos-arm64
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            asset_name: mopytui-windows-x86_64
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: sync version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Syncing project version to $VERSION"
+
+          tmp=$(mktemp)
+          awk -v v="$VERSION" '
+            /^\[/ { in_pkg = ($0 == "[package]") }
+            in_pkg && /^version[[:space:]]*=/ && !done { sub(/=.*/, "= \"" v "\""); done=1 }
+            { print }
+          ' Cargo.toml > "$tmp"
+          mv "$tmp" Cargo.toml
+
+          echo "--- patched ---"
+          awk '/^\[package\]/{f=1} f && /^version/{print; exit}' Cargo.toml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: build
+        shell: bash
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: strip binary (unix)
+        if: matrix.platform != 'windows-latest'
+        shell: bash
+        # Must run BEFORE codesign — strip rewrites the binary and would
+        # invalidate any signature applied earlier.
+        run: strip target/${{ matrix.target }}/release/mopytui
+
+      - name: codesign + notarize (macOS)
+        if: matrix.target == 'aarch64-apple-darwin'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Spin up a throwaway keychain so we don't touch the runner's
+          # login keychain.
+          KEYCHAIN=build.keychain
+          KEYCHAIN_PASSWORD=$(uuidgen)
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security default-keychain -s "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > cert.p12
+          security import cert.p12 -k "$KEYCHAIN" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          rm cert.p12
+
+          BIN=target/${{ matrix.target }}/release/mopytui
+
+          # Hardened runtime + secure timestamp — both required by the
+          # notary service.
+          codesign --force --options runtime --timestamp \
+            --sign "$APPLE_SIGNING_IDENTITY" "$BIN"
+          codesign --verify --strict --verbose=2 "$BIN"
+
+          # Submit to Apple's notary service. We can't `stapler staple`
+          # to a bare Mach-O binary (stapling only works on .app/.pkg/.dmg),
+          # so Gatekeeper will resolve the notarization ticket online on
+          # first run — which is fine for a CLI tool.
+          ditto -c -k --keepParent "$BIN" notarize.zip
+          xcrun notarytool submit notarize.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          rm notarize.zip
+
+      - name: package (unix)
+        if: matrix.platform != 'windows-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist="${{ matrix.asset_name }}"
+          mkdir -p "$dist"
+          cp target/${{ matrix.target }}/release/mopytui "$dist/"
+          cp README.md LICENSE "$dist/"
+          tar -czf "$dist.tar.gz" "$dist"
+          shasum -a 256 "$dist.tar.gz" > "$dist.tar.gz.sha256"
+
+      - name: package (windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          $dist = "${{ matrix.asset_name }}"
+          New-Item -ItemType Directory -Path $dist | Out-Null
+          Copy-Item "target\${{ matrix.target }}\release\mopytui.exe" -Destination $dist
+          Copy-Item README.md, LICENSE -Destination $dist
+          Compress-Archive -Path $dist -DestinationPath "$dist.zip"
+          (Get-FileHash "$dist.zip" -Algorithm SHA256).Hash | Out-File -Encoding ascii "$dist.zip.sha256"
+
+      - name: upload to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: false
+          name: 'mopytui ${{ github.ref_name }}'
+          body: |
+            A feature-rich TUI client for Mopidy with cover art rendering,
+            Tidal browsing/search, synced lyrics, and listening stats.
+
+            **Linux (x86_64):** `mopytui-linux-x86_64.tar.gz`
+            **macOS (Apple Silicon):** `mopytui-macos-arm64.tar.gz` — signed
+            with Developer ID and notarized by Apple. Gatekeeper resolves
+            the ticket online on first run.
+            **Windows (x86_64):** `mopytui-windows-x86_64.zip`
+
+            For best visuals use a terminal with Kitty graphics
+            (Kitty, WezTerm, Ghostty) or iTerm2 inline images. See the
+            README for build/usage details.
+          files: |
+            ${{ matrix.asset_name }}.tar.gz
+            ${{ matrix.asset_name }}.tar.gz.sha256
+            ${{ matrix.asset_name }}.zip
+            ${{ matrix.asset_name }}.zip.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
