@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/icon.png" alt="mopytui" width="160" />
-</p>
-
 <h1 align="center">mopytui</h1>
 
 A full-featured terminal client for [Mopidy](https://mopidy.com/) — built
