@@ -1,4 +1,8 @@
-# mopytui
+<p align="center">
+  <img src="assets/icon.png" alt="mopytui" width="160" />
+</p>
+
+<h1 align="center">mopytui</h1>
 
 A full-featured terminal client for [Mopidy](https://mopidy.com/) — built
 around the native JSON-RPC API so it surfaces everything `mopidy-mpd` does
@@ -29,6 +33,17 @@ halfblocks** — detected at runtime.
  ▶  2:41  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●─────────────────────────  5:18
  [space] play/pause · [>] next · [/] search · [f] favorite · [?] help
 ```
+
+## Screenshots
+
+<p align="center">
+  <img src="https://paste.priet.us/file/ec824762dc" width="48%" alt="mopytui screenshot 1" />
+  <img src="https://paste.priet.us/file/4a9d4420c1" width="48%" alt="mopytui screenshot 2" />
+</p>
+<p align="center">
+  <img src="https://paste.priet.us/file/0819ad97ce" width="48%" alt="mopytui screenshot 3" />
+  <img src="https://paste.priet.us/file/601d40db08" width="48%" alt="mopytui screenshot 4" />
+</p>
 
 ## Features
 
