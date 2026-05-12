@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::musicbrainz::{MbArtistInfo, MbRelease, MusicBrainz};
 use super::wikipedia::{WikiSummary, Wikipedia};
+use crate::fanart::Fanart;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlbumMeta {
@@ -18,11 +19,16 @@ pub struct ArtistMeta {
 pub struct MetadataState {
     pub mb: MusicBrainz,
     pub wiki: Wikipedia,
+    pub fanart: Fanart,
 }
 
 impl MetadataState {
     pub fn new() -> Self {
-        Self { mb: MusicBrainz::new(), wiki: Wikipedia::new() }
+        Self {
+            mb: MusicBrainz::new(),
+            wiki: Wikipedia::new(),
+            fanart: Fanart::new(),
+        }
     }
 }
 

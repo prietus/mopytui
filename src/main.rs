@@ -15,6 +15,7 @@ mod audio;
 mod cmd;
 mod config;
 mod events;
+mod fanart;
 mod images;
 mod input;
 mod lyrics;

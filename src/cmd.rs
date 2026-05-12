@@ -155,6 +155,9 @@ pub async fn refresh_playback(app: &mut App) {
                 app.lyrics_key = None;
                 app.current_album_meta = None;
                 app.current_artist_meta = None;
+                app.current_artist_avatar_key = None;
+                app.info_protocols.clear();
+                app.info_protocol_sizes.clear();
                 app.meta_key = None;
                 if let Some(t) = app.playback.current.clone() {
                     schedule_cover_for_track(app, &t).await;
@@ -449,9 +452,12 @@ pub fn schedule_metadata_for_track(app: &mut App, track: &Track) {
         slot.key = Some(key.clone());
         slot.album = None;
         slot.artist = None;
+        slot.artist_avatar_key = None;
     }
     let state = app.metadata.clone();
     let slot = app.meta_slot.clone();
+    let images = app.images.clone();
+    let fanart_api_key = app.cfg.fanart_api_key.clone().unwrap_or_default();
     tokio::spawn(async move {
         let (album_res, artist_res) = tokio::join!(
             async {
@@ -463,12 +469,53 @@ pub fn schedule_metadata_for_track(app: &mut App, track: &Track) {
             },
             state.artist(&artist),
         );
-        let mut s = slot.lock().unwrap();
-        // Only write if the key still matches — the user may have skipped
-        // tracks while we were fetching.
-        if s.key.as_deref() == Some(key.as_str()) {
-            if let Some(a) = album_res { s.album = Some(a); }
-            s.artist = Some(artist_res);
+
+        // Capture the MBID before moving artist_res into the slot.
+        let artist_mbid = artist_res
+            .info
+            .as_ref()
+            .map(|i| i.id.clone())
+            .filter(|s| !s.is_empty());
+
+        {
+            let mut s = slot.lock().unwrap();
+            if s.key.as_deref() == Some(key.as_str()) {
+                if let Some(a) = album_res { s.album = Some(a); }
+                s.artist = Some(artist_res);
+            }
+        }
+
+        // Try to pull an artist thumbnail from fanart.tv. Requires both an
+        // API key and the MusicBrainz id; otherwise silently skip.
+        if let Some(mbid) = artist_mbid
+            && !fanart_api_key.is_empty()
+            && let Some(url) = state.fanart.artist_image_url(&mbid, &fanart_api_key).await
+        {
+            let cache_key = format!("fanart:artist:{mbid}");
+            // Reuse existing decode if cached from a previous run.
+            if !images.contains(&cache_key) {
+                match state.fanart.download_bytes(&url).await {
+                    Ok(bytes) => match image::load_from_memory(&bytes) {
+                        Ok(img) => {
+                            images.put(cache_key.clone(), std::sync::Arc::new(img));
+                        }
+                        Err(e) => tracing::warn!(
+                            target: "mopytui::fanart",
+                            "decode {mbid}: {e}"
+                        ),
+                    },
+                    Err(e) => tracing::warn!(
+                        target: "mopytui::fanart",
+                        "download {mbid}: {e:#}"
+                    ),
+                }
+            }
+            if images.contains(&cache_key) {
+                let mut s = slot.lock().unwrap();
+                if s.key.as_deref() == Some(key.as_str()) {
+                    s.artist_avatar_key = Some(cache_key);
+                }
+            }
         }
     });
 }

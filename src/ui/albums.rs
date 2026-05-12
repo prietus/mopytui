@@ -310,9 +310,30 @@ fn render_detail_left(f: &mut Frame, app: &mut App, area: Rect, detail: &AlbumDe
         .constraints([Constraint::Min(8), Constraint::Length(7)])
         .split(area);
 
-    // Reuse the album-card thumbnail renderer with the bigger area.
-    render_thumbnail(f, app, rows[0], &detail.card);
+    // Constrain the cover to a visual square (width = height × cell aspect)
+    // centred horizontally in the column so it doesn't stretch to fill the
+    // whole 40% pane.
+    let cover_area = square_cover_area(rows[0], app);
+    render_thumbnail(f, app, cover_area, &detail.card);
     render_detail_actions(f, app, rows[1], detail);
+}
+
+fn square_cover_area(area: Rect, app: &App) -> Rect {
+    if area.width == 0 || area.height == 0 {
+        return area;
+    }
+    let fs = app.picker.font_size();
+    // For a visual square: w_cells × fs.width ≈ h_cells × fs.height.
+    let target_w =
+        ((area.height as u32 * fs.height as u32) / fs.width.max(1) as u32).min(area.width as u32)
+            as u16;
+    let pad_x = area.width.saturating_sub(target_w) / 2;
+    Rect {
+        x: area.x + pad_x,
+        y: area.y,
+        width: target_w,
+        height: area.height,
+    }
 }
 
 fn render_detail_actions(f: &mut Frame, app: &App, area: Rect, detail: &AlbumDetail) {

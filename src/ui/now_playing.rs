@@ -27,13 +27,46 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// Returns the height in rows to reserve for the spectrum panel below the
+/// cover. Returns 0 when there's no live audio FIFO; the visualiser is
+/// strictly opt-in via the `audio_pipe` config option.
+fn spectrum_rows(app: &App, inner: Rect) -> u16 {
+    let has_live_audio = app
+        .audio_reader
+        .as_ref()
+        .map(|r| r.is_live())
+        .unwrap_or(false);
+    if !has_live_audio {
+        return 0;
+    }
+    // Don't eat too much of small windows: 8 rows when we have height to
+    // spare, otherwise scale down to a floor of 5 (still readable).
+    let want: u16 = 8;
+    if inner.height >= want + 12 { want } else if inner.height >= 12 { 5 } else { 0 }
+}
+
+/// Split a column into [cover area, spectrum area]. If `spectrum_h` is 0 the
+/// cover takes the full column.
+fn split_cover_spectrum(col: Rect, spectrum_h: u16) -> (Rect, Rect) {
+    if spectrum_h == 0 {
+        return (col, Rect { x: col.x, y: col.y + col.height, width: col.width, height: 0 });
+    }
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(8), Constraint::Length(spectrum_h)])
+        .split(col);
+    (rows[0], rows[1])
+}
+
 /// Fit mode: the cover panel is sized to match the image aspect (square at
 /// the available height). Lyrics get whatever's left to the right; without
 /// lyrics, the cover sits on the left with the right side empty (or could
 /// hold album info in future).
 fn layout_fit(f: &mut Frame, app: &mut App, inner: Rect, show_lyrics: bool) {
-    // Square cover: width-in-cells ≈ 2 × height-in-cells (cells are 2:1).
-    let max_cover_w = (inner.height as u32).saturating_mul(2) as u16;
+    let spectrum_h = spectrum_rows(app, inner);
+    // Square cover based on remaining height after carving out the spectrum.
+    let cover_col_height = inner.height.saturating_sub(spectrum_h);
+    let max_cover_w = (cover_col_height as u32).saturating_mul(2) as u16;
     let cover_w = max_cover_w.min(inner.width);
 
     if show_lyrics {
@@ -43,7 +76,11 @@ fn layout_fit(f: &mut Frame, app: &mut App, inner: Rect, show_lyrics: bool) {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(cover_w), Constraint::Min(20)])
             .split(inner);
-        crate::images::render_cover_widget(f, app, cols[0]);
+        let (cover_area, spec_area) = split_cover_spectrum(cols[0], spectrum_h);
+        crate::images::render_cover_widget(f, app, cover_area);
+        if spectrum_h > 0 {
+            crate::ui::spectrum::render(f, app, spec_area);
+        }
         render_lyrics(f, app, cols[1]);
     } else {
         // Centre the cover horizontally.
@@ -56,7 +93,11 @@ fn layout_fit(f: &mut Frame, app: &mut App, inner: Rect, show_lyrics: bool) {
                 Constraint::Min(0),
             ])
             .split(inner);
-        crate::images::render_cover_widget(f, app, cols[1]);
+        let (cover_area, spec_area) = split_cover_spectrum(cols[1], spectrum_h);
+        crate::images::render_cover_widget(f, app, cover_area);
+        if spectrum_h > 0 {
+            crate::ui::spectrum::render(f, app, spec_area);
+        }
     }
 }
 
@@ -64,7 +105,9 @@ fn layout_fit(f: &mut Frame, app: &mut App, inner: Rect, show_lyrics: bool) {
 /// needed. Without lyrics we still pin it to a centred square so the
 /// artwork doesn't get stretched across the full body width.
 fn layout_crop(f: &mut Frame, app: &mut App, inner: Rect, show_lyrics: bool) {
-    let max_cover_w = (inner.height as u32).saturating_mul(2) as u16;
+    let spectrum_h = spectrum_rows(app, inner);
+    let cover_col_height = inner.height.saturating_sub(spectrum_h);
+    let max_cover_w = (cover_col_height as u32).saturating_mul(2) as u16;
     let cover_w = max_cover_w.min(inner.width);
 
     if show_lyrics {
@@ -73,7 +116,11 @@ fn layout_crop(f: &mut Frame, app: &mut App, inner: Rect, show_lyrics: bool) {
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(cover_w), Constraint::Min(20)])
             .split(inner);
-        crate::images::render_cover_widget(f, app, cols[0]);
+        let (cover_area, spec_area) = split_cover_spectrum(cols[0], spectrum_h);
+        crate::images::render_cover_widget(f, app, cover_area);
+        if spectrum_h > 0 {
+            crate::ui::spectrum::render(f, app, spec_area);
+        }
         render_lyrics(f, app, cols[1]);
     } else {
         let pad = inner.width.saturating_sub(cover_w) / 2;
@@ -85,7 +132,11 @@ fn layout_crop(f: &mut Frame, app: &mut App, inner: Rect, show_lyrics: bool) {
                 Constraint::Min(0),
             ])
             .split(inner);
-        crate::images::render_cover_widget(f, app, cols[1]);
+        let (cover_area, spec_area) = split_cover_spectrum(cols[1], spectrum_h);
+        crate::images::render_cover_widget(f, app, cover_area);
+        if spectrum_h > 0 {
+            crate::ui::spectrum::render(f, app, spec_area);
+        }
     }
 }
 

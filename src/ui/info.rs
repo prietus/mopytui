@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 
 use crate::app::App;
 
-pub fn render(f: &mut Frame, app: &App, area: Rect) {
+pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -15,7 +15,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
     render_artist(f, app, cols[1]);
 }
 
-fn render_album(f: &mut Frame, app: &App, area: Rect) {
+fn render_album(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -24,10 +24,29 @@ fn render_album(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let Some(track) = &app.playback.current else {
+    if app.playback.current.is_none() {
         f.render_widget(server_info(app), inner);
         return;
-    };
+    }
+    let track = app.playback.current.clone().unwrap();
+
+    // Reserve room at the top for the cover (only when one is loaded).
+    let cover_key = app.cover_uri_for_current.clone();
+    let has_cover = cover_key
+        .as_deref()
+        .map(|k| app.images.contains(k))
+        .unwrap_or(false);
+    let img_rows: u16 = if has_cover { 12 } else { 0 };
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(img_rows), Constraint::Min(0)])
+        .split(inner);
+    if has_cover
+        && let Some(key) = &cover_key
+    {
+        crate::images::render_info_image(f, app, layout[0], key);
+    }
+    let text_area = layout[1];
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(Span::styled(
@@ -99,11 +118,11 @@ fn render_album(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: false }),
-        inner,
+        text_area,
     );
 }
 
-fn render_artist(f: &mut Frame, app: &App, area: Rect) {
+fn render_artist(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -112,9 +131,28 @@ fn render_artist(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let Some(track) = &app.playback.current else {
+    if app.playback.current.is_none() {
         return;
-    };
+    }
+    let track = app.playback.current.clone().unwrap();
+
+    // Reserve room at the top for the artist avatar (fanart.tv).
+    let avatar_key = app.current_artist_avatar_key.clone();
+    let has_avatar = avatar_key
+        .as_deref()
+        .map(|k| app.images.contains(k))
+        .unwrap_or(false);
+    let img_rows: u16 = if has_avatar { 12 } else { 0 };
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(img_rows), Constraint::Min(0)])
+        .split(inner);
+    if has_avatar
+        && let Some(key) = &avatar_key
+    {
+        crate::images::render_info_image(f, app, layout[0], key);
+    }
+    let text_area = layout[1];
 
     let mut lines: Vec<Line> = Vec::new();
     lines.push(Line::from(Span::styled(
@@ -180,7 +218,7 @@ fn render_artist(f: &mut Frame, app: &App, area: Rect) {
 
     f.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: false }),
-        inner,
+        text_area,
     );
 }
 

@@ -336,6 +336,11 @@ pub struct App {
     pub meta_key: Option<String>,
     pub current_album_meta: Option<AlbumMeta>,
     pub current_artist_meta: Option<ArtistMeta>,
+    pub current_artist_avatar_key: Option<String>,
+    /// Per-image `StatefulProtocol` cache used by the Info view (album cover
+    /// + artist avatar). Keyed by image cache key.
+    pub info_protocols: HashMap<String, StatefulProtocol>,
+    pub info_protocol_sizes: HashMap<String, (u16, u16)>,
 
     pub status: StatusBar,
     pub quit: bool,
@@ -389,6 +394,9 @@ impl App {
             meta_key: None,
             current_album_meta: None,
             current_artist_meta: None,
+            current_artist_avatar_key: None,
+            info_protocols: HashMap::new(),
+            info_protocol_sizes: HashMap::new(),
             status: StatusBar::default(),
             quit: false,
             last_tick: Instant::now(),
@@ -459,6 +467,11 @@ impl App {
         {
             self.current_artist_meta = Some(a);
         }
+        if self.current_artist_avatar_key.is_none()
+            && let Some(k) = slot.artist_avatar_key.take()
+        {
+            self.current_artist_avatar_key = Some(k);
+        }
     }
 }
 
@@ -467,6 +480,9 @@ pub struct MetaSlot {
     pub key: Option<String>,
     pub album: Option<AlbumMeta>,
     pub artist: Option<ArtistMeta>,
+    /// Cache key under which the decoded artist avatar (from fanart.tv) was
+    /// stored in `App::images`. The Info view looks it up via this key.
+    pub artist_avatar_key: Option<String>,
 }
 
 /// Inputs that mutate state asynchronously via the client. Returning a Cmd

@@ -175,6 +175,50 @@ pub fn render_cover_widget(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// Render an arbitrary decoded image from `app.images` into `area`,
+/// constraining it to a visual square based on the available height (so it
+/// doesn't stretch when the area is wider than tall) and **left-aligned**
+/// within `area`. Builds and caches a `StatefulProtocol` per (uri, area-size)
+/// in `app.info_protocols`. Used by the Info view for the album cover +
+/// artist avatar.
+pub fn render_info_image(f: &mut Frame, app: &mut App, area: Rect, image_key: &str) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let mut target = square_area(area);
+    // Left-align inside the parent area instead of the centered default.
+    target.x = area.x;
+    let area_size = (target.width, target.height);
+
+    let size_changed = app
+        .info_protocol_sizes
+        .get(image_key)
+        .map(|sz| sz != &area_size)
+        .unwrap_or(true);
+
+    if (size_changed || !app.info_protocols.contains_key(image_key))
+        && let Some(img) = app.images.get(image_key)
+    {
+        let fs = app.picker.font_size();
+        let tw = (target.width as u32) * (fs.width as u32);
+        let th = (target.height as u32) * (fs.height as u32);
+        let resized = if tw > 0 && th > 0 {
+            img.resize_to_fill(tw, th, image::imageops::FilterType::Lanczos3)
+        } else {
+            (*img).clone()
+        };
+        let proto = app.picker.new_resize_protocol(resized);
+        app.info_protocols.insert(image_key.to_string(), proto);
+        app.info_protocol_sizes
+            .insert(image_key.to_string(), area_size);
+    }
+
+    if let Some(proto) = app.info_protocols.get_mut(image_key) {
+        let widget = StatefulImage::default().resize(Resize::Fit(None));
+        f.render_stateful_widget(widget, target, proto);
+    }
+}
+
 fn square_area(area: Rect) -> Rect {
     // Terminal cells are ~2:1 (taller than wide), so for an on-screen square
     // we want width-in-cells ≈ 2 × height-in-cells. Pick the largest such
