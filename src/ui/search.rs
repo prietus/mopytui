@@ -145,7 +145,7 @@ fn render_results(f: &mut Frame, app: &mut App, area: Rect) {
                             .fg(app.theme.warn)
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled("□ ", Style::default().fg(app.theme.accent_alt)),
+                    Span::styled("◉ ", Style::default().fg(app.theme.accent_alt)),
                     Span::styled(
                         a.name.clone(),
                         Style::default()

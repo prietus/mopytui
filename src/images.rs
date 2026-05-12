@@ -110,13 +110,12 @@ pub fn render_cover_widget(f: &mut Frame, app: &mut App, area: Rect) {
     let cover_key = app.cover_uri_for_current.clone();
     let area_size = (area.width, area.height);
 
-    // Rebuild the protocol when the cover changes OR — for Crop mode — when
-    // the area resizes, because Crop pre-resamples the image to exactly fill
-    // `area` in pixels (ratatui-image's own `Resize::Crop` only clips source
-    // pixels, it does not upscale, so a small source cover leaves blank
-    // space in a tall container).
+    // Rebuild the protocol when the cover changes OR when the area resizes.
+    // Both modes pre-resample the source image to exact pixel dimensions
+    // (ratatui-image's `Resize::Fit/Crop` won't upscale, so a small source
+    // cover would otherwise sit in the top-left corner of a larger panel).
     let need_rebuild = match (&app.cover_protocol_uri, &cover_key, app.cover_protocol_size) {
-        (Some(a), Some(b), Some(sz)) => a != b || (app.cover_fit_mode == CoverFitMode::Crop && sz != area_size),
+        (Some(a), Some(b), Some(sz)) => a != b || sz != area_size,
         (_, Some(_), None) => true,
         (None, Some(_), _) => true,
         _ => false,
@@ -126,9 +125,9 @@ pub fn render_cover_widget(f: &mut Frame, app: &mut App, area: Rect) {
         && let Some(uri) = &cover_key
         && let Some(img) = app.images.get(uri)
     {
+        let fs = app.picker.font_size();
         let img_for_protocol = match app.cover_fit_mode {
             CoverFitMode::Crop => {
-                let fs = app.picker.font_size();
                 let tw = (area.width as u32) * (fs.width as u32);
                 let th = (area.height as u32) * (fs.height as u32);
                 if tw > 0 && th > 0 {
@@ -137,7 +136,19 @@ pub fn render_cover_widget(f: &mut Frame, app: &mut App, area: Rect) {
                     (*img).clone()
                 }
             }
-            CoverFitMode::Fit => (*img).clone(),
+            CoverFitMode::Fit => {
+                // Pre-resize to exactly fill the centred square (in pixels)
+                // so the protocol doesn't anchor a smaller source at the
+                // top-left of the target rect.
+                let target = square_area(area);
+                let tw = (target.width as u32) * (fs.width as u32);
+                let th = (target.height as u32) * (fs.height as u32);
+                if tw > 0 && th > 0 {
+                    img.resize_to_fill(tw, th, image::imageops::FilterType::Lanczos3)
+                } else {
+                    (*img).clone()
+                }
+            }
         };
         let proto = app.picker.new_resize_protocol(img_for_protocol);
         app.cover_protocol = Some(proto);

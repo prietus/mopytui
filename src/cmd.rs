@@ -765,7 +765,12 @@ pub async fn load_goodies(app: &mut App) {
             app.goodies.genres = parse_genres(&v);
         }
         GoodiesTab::Totals => {
-            app.goodies.totals = app.client.goodies_stats_totals().await.ok();
+            let (t, h) = tokio::join!(
+                app.client.goodies_stats_totals(),
+                app.client.goodies_stats_by_hour(),
+            );
+            app.goodies.totals = t.ok();
+            app.goodies.heatmap_hours = parse_buckets(h.unwrap_or_default(), 24, "hour");
         }
     }
     if app.goodies.state.selected().is_none() {
@@ -815,6 +820,29 @@ pub async fn toggle_favorite_album(app: &mut App, uri: String) {
     }
 }
 
+/// Common field names goodies uses for "how many plays" across endpoints.
+const COUNT_KEYS: &[&str] = &[
+    "count",
+    "plays",
+    "play_count",
+    "playcount",
+    "n_plays",
+    "play_counts",
+    "n",
+    "total",
+    "value",
+    "occurrences",
+];
+
+fn pick_count(v: &serde_json::Value) -> Option<u64> {
+    for k in COUNT_KEYS {
+        if let Some(n) = v.get(*k).and_then(|x| x.as_u64()) {
+            return Some(n);
+        }
+    }
+    None
+}
+
 fn parse_buckets(v: serde_json::Value, n: usize, key_field: &str) -> Vec<u64> {
     // Accept either:
     //  • a plain numeric array [c0, c1, ...]
@@ -830,7 +858,7 @@ fn parse_buckets(v: serde_json::Value, n: usize, key_field: &str) -> Vec<u64> {
         }
         for item in arr {
             let idx = item.get(key_field).and_then(|x| x.as_u64()).map(|n| n as usize);
-            let count = item.get("count").and_then(|x| x.as_u64()).unwrap_or(0);
+            let count = pick_count(item).unwrap_or(0);
             if let Some(i) = idx
                 && i < n
             {
@@ -839,13 +867,22 @@ fn parse_buckets(v: serde_json::Value, n: usize, key_field: &str) -> Vec<u64> {
         }
     } else if let Some(obj) = v.as_object() {
         for (k, val) in obj {
-            if let (Ok(i), Some(c)) = (k.parse::<usize>(), val.as_u64())
-                && i < n
-            {
-                out[i] = c;
+            if let Some(c) = val.as_u64() {
+                if let Ok(i) = k.parse::<usize>()
+                    && i < n
+                {
+                    out[i] = c;
+                }
+            } else if let Some(c) = pick_count(val) {
+                if let Ok(i) = k.parse::<usize>()
+                    && i < n
+                {
+                    out[i] = c;
+                }
             }
         }
     }
+    tracing::debug!(target: "mopytui::goodies", "parse_buckets({key_field}): {:?}", out);
     out
 }
 
@@ -858,29 +895,48 @@ fn parse_genres(v: &serde_json::Value) -> Vec<(String, u64)> {
                 .or_else(|| x.get("name"))
                 .and_then(|v| v.as_str())?
                 .to_string();
-            let c = x.get("count").and_then(|v| v.as_u64()).unwrap_or(0);
+            let c = pick_count(&x).unwrap_or(0);
             Some((g, c))
         })
         .collect();
     out.sort_by(|a, b| b.1.cmp(&a.1));
+    if !out.is_empty() {
+        tracing::debug!(target: "mopytui::goodies", "parse_genres: {} entries, top={:?}", out.len(), out.first());
+    }
     out
 }
 
 fn parse_goodies(v: &serde_json::Value) -> Vec<crate::app::GoodiesItem> {
     let arr = v.as_array().cloned().unwrap_or_default();
+    if let Some(sample) = arr.first() {
+        tracing::debug!(target: "mopytui::goodies", "parse_goodies sample: {}", sample);
+    }
     arr.into_iter()
         .map(|x| {
-            let title = x.get("title")
-                .or_else(|| x.get("name"))
-                .or_else(|| x.get("album"))
-                .or_else(|| x.get("artist"))
-                .and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let subtitle = x.get("artist")
-                .or_else(|| x.get("album"))
-                .or_else(|| x.get("year"))
-                .and_then(|v| v.as_str()).unwrap_or("").to_string();
+            // Track which field gave us the title so we can avoid using it
+            // again for the subtitle (otherwise endpoints that key by artist
+            // end up showing "Artist · Artist").
+            let (title, title_src) = ["title", "name", "track", "track_name", "album", "artist"]
+                .iter()
+                .find_map(|k| {
+                    x.get(*k)
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| (s.to_string(), *k))
+                })
+                .unwrap_or_default();
+            let subtitle = ["artist", "album_artist", "album", "year"]
+                .iter()
+                .filter(|k| **k != title_src)
+                .find_map(|k| {
+                    x.get(*k)
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_default();
             let uri = x.get("uri").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            let count = x.get("count").or_else(|| x.get("play_count")).and_then(|v| v.as_u64()).map(|n| n as u32);
+            let count = pick_count(&x).map(|n| n as u32);
             crate::app::GoodiesItem { uri, title, subtitle, count }
         })
         .collect()

@@ -33,12 +33,15 @@ halfblocks** — detected at runtime.
 ## Screenshots
 
 <p align="center">
-  <img src="https://paste.priet.us/file/ec824762dc" width="48%" alt="mopytui screenshot 1" />
-  <img src="https://paste.priet.us/file/4a9d4420c1" width="48%" alt="mopytui screenshot 2" />
+  <img src="https://paste.priet.us/file/a7760a4ac1" width="48%" alt="mopytui screenshot 1" />
+  <img src="https://paste.priet.us/file/935dba0e99" width="48%" alt="mopytui screenshot 2" />
 </p>
 <p align="center">
-  <img src="https://paste.priet.us/file/0819ad97ce" width="48%" alt="mopytui screenshot 3" />
-  <img src="https://paste.priet.us/file/601d40db08" width="48%" alt="mopytui screenshot 4" />
+  <img src="https://paste.priet.us/file/7196d17116" width="48%" alt="mopytui screenshot 3" />
+  <img src="https://paste.priet.us/file/849527fdd4" width="48%" alt="mopytui screenshot 4" />
+</p>
+<p align="center">
+  <img src="https://paste.priet.us/file/808c7d78f1" width="48%" alt="mopytui screenshot 5" />
 </p>
 
 ## Features
