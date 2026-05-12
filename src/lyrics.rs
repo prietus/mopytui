@@ -115,7 +115,7 @@ impl LyricsCache {
             inner: Arc::new(Mutex::new(HashMap::new())),
             client: reqwest::Client::builder()
                 .user_agent(USER_AGENT)
-                .timeout(Duration::from_secs(8))
+                .timeout(Duration::from_secs(20))
                 .build()
                 .expect("reqwest build"),
         }
@@ -157,27 +157,48 @@ pub async fn fetch_for(
     let duration_s = (duration_ms / 1000).max(0);
     tracing::debug!(target: "mopytui::lyrics", "lrclib lookup: {artist} — {title} ({album}, {duration_s}s)");
 
-    let exact = fetch_exact(&cache.client, artist, title, album, duration_s).await;
-    if let Err(e) = &exact {
-        tracing::warn!(target: "mopytui::lyrics", "lrclib /get failed: {e:#}");
-    }
-    let from_exact = exact.ok().flatten();
-    let result = if let Some(p) = from_exact {
-        Some(Arc::new(p))
-    } else {
-        match fetch_search(&cache.client, artist, title).await {
-            Ok(opt) => opt.map(Arc::new),
-            Err(e) => {
-                tracing::warn!(target: "mopytui::lyrics", "lrclib /search failed: {e:#}");
-                None
-            }
+    // lrclib is intermittently slow/unreachable from some networks. Try up to
+    // 3 times with backoff; only commit a `None` result to the cache when
+    // both `/get` and `/search` came back with a confirmed empty response
+    // (so a transient network failure doesn't poison the UI as "not found"
+    // for the rest of the session).
+    let mut result: Option<Arc<ParsedLyrics>> = None;
+    for attempt in 1..=3u32 {
+        let exact = fetch_exact(&cache.client, artist, title, album, duration_s).await;
+        if let Err(e) = &exact {
+            tracing::warn!(target: "mopytui::lyrics", "attempt {attempt}: /get failed: {e:#}");
         }
-    };
+        if let Ok(Some(p)) = &exact {
+            result = Some(Arc::new(p.clone()));
+            break;
+        }
+
+        let search = fetch_search(&cache.client, artist, title).await;
+        if let Err(e) = &search {
+            tracing::warn!(target: "mopytui::lyrics", "attempt {attempt}: /search failed: {e:#}");
+        }
+        if let Ok(Some(p)) = &search {
+            result = Some(Arc::new(p.clone()));
+            break;
+        }
+
+        // Both endpoints answered cleanly with "no result" → it really isn't
+        // on lrclib. Stop retrying.
+        if exact.is_ok() && search.is_ok() {
+            break;
+        }
+
+        // Transient: back off and retry.
+        if attempt < 3 {
+            tokio::time::sleep(Duration::from_secs((attempt as u64) * 2)).await;
+        }
+    }
+
     match &result {
         Some(p) if p.has_synced() => tracing::debug!(target: "mopytui::lyrics", "synced lyrics found"),
         Some(p) if p.instrumental => tracing::debug!(target: "mopytui::lyrics", "instrumental"),
         Some(_) => tracing::debug!(target: "mopytui::lyrics", "plain lyrics found"),
-        None => tracing::debug!(target: "mopytui::lyrics", "no lyrics on lrclib"),
+        None => tracing::debug!(target: "mopytui::lyrics", "no lyrics on lrclib (after retries)"),
     }
     cache.put(key, result.clone());
     Ok(result)
