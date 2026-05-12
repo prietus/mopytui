@@ -62,15 +62,24 @@ async fn main() -> Result<()> {
         cli.image_protocol,
     );
 
-    // Audio pipe for real FFT spectrum (optional). Reads from config or CLI
-    // override — only meaningful when mopidy runs locally and writes to a
-    // FIFO mopytui can read. If the FIFO doesn't exist yet, the reader
-    // thread keeps retrying open(), so it also handles mopidy starting
-    // later.
-    let audio_reader = cfg
-        .audio_pipe
+    // Audio source for real FFT spectrum (optional). TCP wins if both are
+    // set. The reader thread keeps retrying connect()/open() if the source
+    // isn't ready yet, so it handles mopidy starting after us too.
+    let audio_source = cfg
+        .audio_udp
         .as_ref()
-        .map(|p| audio::spawn_audio_reader(std::path::PathBuf::from(p)));
+        .map(|a| audio::AudioSource::Udp(a.clone()))
+        .or_else(|| {
+            cfg.audio_tcp
+                .as_ref()
+                .map(|a| audio::AudioSource::Tcp(a.clone()))
+        })
+        .or_else(|| {
+            cfg.audio_pipe
+                .as_ref()
+                .map(|p| audio::AudioSource::Fifo(std::path::PathBuf::from(p)))
+        });
+    let audio_reader = audio_source.map(audio::spawn_audio_reader);
 
     let mut app = App::new(cfg, client, images, picker, audio_reader);
 
@@ -246,6 +255,8 @@ struct CliOverrides {
     theme: Option<String>,
     image_protocol: Option<String>,
     audio_pipe: Option<String>,
+    audio_tcp: Option<String>,
+    audio_udp: Option<String>,
 }
 
 impl CliOverrides {
@@ -255,6 +266,8 @@ impl CliOverrides {
         if let Some(p) = self.mpd_port { cfg.mpd_port = p; }
         if let Some(t) = &self.theme { cfg.theme = t.clone(); }
         if let Some(p) = &self.audio_pipe { cfg.audio_pipe = Some(p.clone()); }
+        if let Some(a) = &self.audio_tcp { cfg.audio_tcp = Some(a.clone()); }
+        if let Some(a) = &self.audio_udp { cfg.audio_udp = Some(a.clone()); }
     }
 }
 
@@ -293,6 +306,12 @@ fn parse_cli() -> CliAction {
             "--audio-pipe" => {
                 if let Some(v) = args.next() { out.audio_pipe = Some(v); }
             }
+            "--audio-tcp" => {
+                if let Some(v) = args.next() { out.audio_tcp = Some(v); }
+            }
+            "--audio-udp" => {
+                if let Some(v) = args.next() { out.audio_udp = Some(v); }
+            }
             _ => {
                 // host:port shorthand: a single positional `host:port` arg.
                 if let Some((h, p)) = a.split_once(':')
@@ -326,9 +345,13 @@ OPTIONS:
                               kitty | iterm2 | sixel | halfblocks
                               Use 'halfblocks' if covers don't render in
                               your terminal — it's the safe fallback.
-    --audio-pipe <PATH>       Read PCM audio from a named pipe to power the
-                              real-FFT spectrum visualizer. Configure mopidy
-                              to tee its output there (see README).
+    --audio-udp <BIND>        Bind a UDP socket (host:port) to receive PCM
+                              from GStreamer `udpsink`. Powers the real-FFT
+                              spectrum visualizer (see config template).
+    --audio-tcp <HOST:PORT>   Connect to a GStreamer `tcpserversink` instead
+                              of UDP (less reliable — can stall mopidy).
+    --audio-pipe <PATH>       Read PCM audio from a named pipe instead of UDP
+                              (legacy; requires `mkfifo` + `filesink`).
     -h, --help                Show this help
     -V, --version             Show version
 

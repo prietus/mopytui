@@ -15,11 +15,20 @@ pub struct AppConfig {
     pub theme: String,
     #[serde(default)]
     pub mpris: bool,
+    /// `host:port` to bind a UDP socket on. GStreamer `udpsink` in mopidy
+    /// fires raw s16le stereo PCM packets at us at 44.1 kHz. Preferred
+    /// transport — no preroll, no stalls, fire-and-forget. Works across
+    /// machines.
+    #[serde(default)]
+    pub audio_udp: Option<String>,
+    /// `host:port` of a GStreamer `tcpserversink`. Alternative to
+    /// `audio_udp`. Can stall mopidy's pipeline if no client is connected
+    /// (`gst_util_uint64_scale: denom != 0` in mopidy logs).
+    #[serde(default)]
+    pub audio_tcp: Option<String>,
     /// Path to a named pipe / file with raw s16le stereo PCM at 44.1 kHz.
-    /// When set and reachable, the spectrum visualizer switches from the
-    /// pseudo oscillators to a real FFT of the live audio. Only useful when
-    /// mopidy runs on the same machine as mopytui (or the FIFO is bridged
-    /// somehow). Leave empty to keep pseudo-spectrum.
+    /// Alternative to `audio_udp` (kept for setups that already use a FIFO).
+    /// Requires `mkfifo` and a `filesink` in mopidy's `output`.
     #[serde(default)]
     pub audio_pipe: Option<String>,
     #[serde(default)]
@@ -43,6 +52,8 @@ impl Default for AppConfig {
             http_port: default_http_port(),
             theme: default_theme(),
             mpris: false,
+            audio_udp: None,
+            audio_tcp: None,
             audio_pipe: None,
             lastfm_api_key: None,
             fanart_api_key: None,
@@ -62,21 +73,21 @@ theme = "midnight"
 # Enable MPRIS integration (Linux only — no-op elsewhere).
 mpris = false
 
-# Live FFT spectrum visualizer (optional). Only works when mopidy runs on
-# the same machine as mopytui — set the path to a named pipe / file that
-# carries raw s16le stereo PCM at 44.1 kHz. Leave commented for pseudo
-# spectrum (no audio analysis).
+# Live FFT spectrum visualizer (optional). Configure mopidy's `[audio] output`
+# to `tee` the stream into a sink mopytui can read. Bit-perfect to the DAC is
+# preserved because `tee` only duplicates buffers and the visualizer branch
+# uses `leaky=2` queues so it never blocks the audio path.
 #
-# Linux + PipeWire (no mopidy config needed — just tap the sink monitor):
-#     mkfifo /tmp/mopidy.fifo
-#     pw-record --target @DEFAULT_AUDIO_SINK@.monitor \
-#       --format=s16 --rate=44100 --channels=2 - > /tmp/mopidy.fifo &
+# Recommended: UDP (fire-and-forget, no preroll). Add to mopidy.conf:
 #
-# macOS local + DAC (add a `tee` to mopidy.conf — see README for the safe
-# bit-perfect pipeline):
-#     mkfifo /tmp/mopidy.fifo
+#     [audio]
+#     output = tee name=t allow-not-linked=true t. ! queue leaky=2 max-size-buffers=200 ! autoaudiosink t. ! queue leaky=2 max-size-buffers=200 ! audioresample ! audioconvert ! audio/x-raw,format=S16LE,rate=44100,channels=2 ! udpsink host=<mopytui-host> port=5555 sync=false
 #
-# audio_pipe = "/tmp/mopidy.fifo"
+# audio_udp = "0.0.0.0:5555"
+#
+# Alternatives (less reliable):
+# audio_tcp  = "127.0.0.1:5555"     # GStreamer tcpserversink
+# audio_pipe = "/tmp/mopidy.fifo"   # filesink + mkfifo
 
 # Optional API keys for richer metadata.
 # last.fm:   https://www.last.fm/api/account/create

@@ -1,29 +1,47 @@
-// The spectrum panel is currently off (user preference), but we keep the
-// audio pipeline + FFT around so it can be re-enabled without rewriting.
+// The spectrum panel is opt-in via `audio_pipe` / `audio_tcp` in config.toml.
+// We keep the audio pipeline + FFT always compiled in so it can be re-enabled
+// without rebuilding.
 #![allow(dead_code)]
 
-//! Audio FIFO reader for the live spectrum visualizer.
+//! Audio reader for the live spectrum visualizer.
 //!
 //! Mopidy doesn't expose audio samples to JSON-RPC clients. To get a real
-//! spectrum we ask the user to configure Mopidy's GStreamer output to `tee`
-//! the audio stream into a named pipe, then we read s16le stereo PCM from
-//! that pipe in a background thread and stash it in a ring buffer for the
-//! UI to FFT.
+//! spectrum we ask the user to configure Mopidy's GStreamer `[audio] output`
+//! to `tee` the audio stream into a sink we can read — either a named pipe
+//! (FIFO) or a TCP server. The PCM is then read in a background thread and
+//! stashed in a ring buffer for the UI to FFT.
 //!
-//! Suggested `mopidy.conf` snippet:
+//! Recommended `mopidy.conf` snippet (UDP, fire-and-forget):
 //!
 //! ```text
 //! [audio]
-//! output = tee name=t ! queue ! audioresample ! audioconvert
-//!   ! audio/x-raw,format=S16LE,rate=44100,channels=2
-//!   ! filesink location=/tmp/mopidy.fifo
-//!   t. ! queue ! autoaudiosink
+//! output = tee name=t allow-not-linked=true
+//!   t. ! queue leaky=2 max-size-buffers=200 ! autoaudiosink
+//!   t. ! queue leaky=2 max-size-buffers=200
+//!      ! audioresample ! audioconvert
+//!      ! audio/x-raw,format=S16LE,rate=44100,channels=2
+//!      ! udpsink host=<mopytui-host> port=5555 sync=false
 //! ```
 //!
-//! And: `mkfifo /tmp/mopidy.fifo` once before starting mopidy.
+//! Then in `~/.config/mopytui/config.toml`:
+//!
+//! ```text
+//! audio_udp = "0.0.0.0:5555"
+//! ```
+//!
+//! UDP is preferred over TCP because `tcpserversink` does async preroll and
+//! computes durations that fail (`gst_util_uint64_scale: denom != 0`) when
+//! no client is connected, which can stall the whole pipeline. `udpsink` is
+//! pure fire-and-forget: drops packets if no one listens, no preroll.
+//!
+//! `leaky=2` on the visualizer branch means buffers are dropped (instead of
+//! blocking the pipeline) if we read slowly or are absent — so the DAC branch
+//! stays bit-perfect.  `allow-not-linked=true` lets Mopidy start before
+//! mopytui is connected.
 
 use std::collections::VecDeque;
 use std::io::Read;
+use std::net::{TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,6 +54,17 @@ const SAMPLE_RATE: u32 = 44_100;
 const RING_CAP: usize = 8192;
 /// Bytes per stereo frame (s16le × 2 channels).
 const STEREO_FRAME_BYTES: usize = 4;
+
+pub enum AudioSource {
+    /// Named-pipe / regular file. mopytui only reads; the producer
+    /// (`filesink location=...`) must create or open the path itself.
+    Fifo(PathBuf),
+    /// `host:port` of a GStreamer `tcpserversink`. We connect as client.
+    Tcp(String),
+    /// `host:port` to bind a UDP socket on. GStreamer `udpsink` fires PCM
+    /// packets at us. Preferred over TCP — no preroll, no stalls.
+    Udp(String),
+}
 
 pub struct AudioReader {
     samples: Mutex<VecDeque<f32>>,
@@ -78,22 +107,29 @@ impl AudioReader {
     pub fn is_live(&self) -> bool { self.has_writer.load(Ordering::Relaxed) }
 }
 
-/// Spawn a dedicated OS thread that opens the FIFO and feeds the ring
-/// buffer. The FIFO `open()` blocks until a writer attaches, so this runs
-/// off the tokio executor.
-pub fn spawn_audio_reader(path: PathBuf) -> Arc<AudioReader> {
+/// Spawn a dedicated OS thread that opens the source and feeds the ring
+/// buffer. Both transports block on `open()`/`connect()` until a producer is
+/// available, so this runs off the tokio executor.
+pub fn spawn_audio_reader(source: AudioSource) -> Arc<AudioReader> {
     let reader = Arc::new(AudioReader::new());
     let r = reader.clone();
+    let name = match &source {
+        AudioSource::Fifo(_) => "audio-fifo",
+        AudioSource::Tcp(_) => "audio-tcp",
+        AudioSource::Udp(_) => "audio-udp",
+    };
     std::thread::Builder::new()
-        .name("audio-fifo".into())
-        .spawn(move || {
-            run_loop(r, path);
+        .name(name.into())
+        .spawn(move || match source {
+            AudioSource::Fifo(p) => fifo_loop(r, p),
+            AudioSource::Tcp(a) => tcp_loop(r, a),
+            AudioSource::Udp(a) => udp_loop(r, a),
         })
         .expect("spawn audio thread");
     reader
 }
 
-fn run_loop(reader: Arc<AudioReader>, path: PathBuf) {
+fn fifo_loop(reader: Arc<AudioReader>, path: PathBuf) {
     loop {
         let file = match std::fs::OpenOptions::new().read(true).open(&path) {
             Ok(f) => f,
@@ -108,16 +144,92 @@ fn run_loop(reader: Arc<AudioReader>, path: PathBuf) {
         read_until_eof(file, &reader);
         reader.has_writer.store(false, Ordering::Relaxed);
         tracing::info!("audio fifo writer disconnected — reopening");
-        // Brief pause so we don't busy-loop on broken pipes.
         std::thread::sleep(Duration::from_millis(200));
     }
 }
 
-fn read_until_eof(mut file: std::fs::File, reader: &Arc<AudioReader>) {
+fn udp_loop(reader: Arc<AudioReader>, addr: String) {
+    loop {
+        let sock = match UdpSocket::bind(&addr) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("audio udp bind {}: {}", addr, e);
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+        };
+        // Read timeout so the `has_writer` flag flips back to false when
+        // mopidy stops sending (paused / stopped), which makes the UI swap
+        // back to "no live audio" instead of showing a frozen spectrum.
+        let _ = sock.set_read_timeout(Some(Duration::from_millis(300)));
+        tracing::info!("audio udp listening: {}", addr);
+        let mut buf = [0u8; 4096];
+        loop {
+            match sock.recv(&mut buf) {
+                Ok(n) => {
+                    let usable = n - (n % STEREO_FRAME_BYTES);
+                    if usable == 0 { continue; }
+                    let frames = &buf[..usable];
+                    let mut samples = reader.samples.lock().unwrap();
+                    for frame in frames.chunks_exact(STEREO_FRAME_BYTES) {
+                        let l = i16::from_le_bytes([frame[0], frame[1]]) as f32 / 32768.0;
+                        let r = i16::from_le_bytes([frame[2], frame[3]]) as f32 / 32768.0;
+                        let mono = 0.5 * (l + r);
+                        if samples.len() >= RING_CAP {
+                            samples.pop_front();
+                        }
+                        samples.push_back(mono);
+                    }
+                    drop(samples);
+                    *reader.last_data_at.lock().unwrap() = Some(Instant::now());
+                    reader.has_writer.store(true, Ordering::Relaxed);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+                {
+                    // No packet in the window — assume mopidy is paused or
+                    // not streaming. UI will switch to "no live audio".
+                    reader.has_writer.store(false, Ordering::Relaxed);
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!("audio udp recv: {e}");
+                    break;
+                }
+            }
+        }
+        reader.has_writer.store(false, Ordering::Relaxed);
+        std::thread::sleep(Duration::from_millis(500));
+    }
+}
+
+fn tcp_loop(reader: Arc<AudioReader>, addr: String) {
+    loop {
+        let stream = match TcpStream::connect(&addr) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("audio tcp {}: {}", addr, e);
+                std::thread::sleep(Duration::from_secs(2));
+                continue;
+            }
+        };
+        // Small read timeout so a dead/stalled server doesn't park us forever
+        // and we cycle back to reconnect.
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        tracing::info!("audio tcp connected: {}", addr);
+        reader.has_writer.store(true, Ordering::Relaxed);
+        read_until_eof(stream, &reader);
+        reader.has_writer.store(false, Ordering::Relaxed);
+        tracing::info!("audio tcp disconnected — reconnecting");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+fn read_until_eof<R: Read>(mut src: R, reader: &Arc<AudioReader>) {
     // Read in chunks aligned to stereo frames.
     let mut buf = [0u8; 4096];
     loop {
-        match file.read(&mut buf) {
+        match src.read(&mut buf) {
             Ok(0) => return, // writer closed
             Ok(n) => {
                 let usable = n - (n % STEREO_FRAME_BYTES);
@@ -138,8 +250,15 @@ fn read_until_eof(mut file: std::fs::File, reader: &Arc<AudioReader>) {
                 drop(samples);
                 *reader.last_data_at.lock().unwrap() = Some(Instant::now());
             }
+            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
+                || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                // Read timeout fired but the connection is alive — keep
+                // looping; the reader UI will just see no fresh data.
+                continue;
+            }
             Err(e) => {
-                tracing::warn!("audio fifo read: {e}");
+                tracing::warn!("audio source read: {e}");
                 return;
             }
         }
