@@ -80,10 +80,106 @@ pub struct QueueState {
     pub table: TableState,
 }
 
+/// Eight tag-style fields we expose in the search form. Mirrors the
+/// ncmpcpp "Search engine" layout but trimmed to what Mopidy backends
+/// actually populate in practice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchField {
+    Any,
+    Artist,
+    AlbumArtist,
+    Album,
+    Title,
+    Genre,
+    Date,
+    Comment,
+}
+
+impl SearchField {
+    pub const ALL: [SearchField; 8] = [
+        SearchField::Any,
+        SearchField::Artist,
+        SearchField::AlbumArtist,
+        SearchField::Album,
+        SearchField::Title,
+        SearchField::Genre,
+        SearchField::Date,
+        SearchField::Comment,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SearchField::Any => "Any",
+            SearchField::Artist => "Artist",
+            SearchField::AlbumArtist => "Album Artist",
+            SearchField::Album => "Album",
+            SearchField::Title => "Title",
+            SearchField::Genre => "Genre",
+            SearchField::Date => "Date",
+            SearchField::Comment => "Comment",
+        }
+    }
+
+    /// Mopidy `core.library.search` query key for this field.
+    pub fn mopidy_key(self) -> &'static str {
+        match self {
+            SearchField::Any => "any",
+            SearchField::Artist => "artist",
+            SearchField::AlbumArtist => "albumartist",
+            SearchField::Album => "album",
+            SearchField::Title => "track_name",
+            SearchField::Genre => "genre",
+            SearchField::Date => "date",
+            SearchField::Comment => "comment",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchFocus {
+    /// Index into `SearchField::ALL`.
+    Field(usize),
+    /// 0 = Local, 1 = Tidal.
+    Source(usize),
+    SearchBtn,
+    ResetBtn,
+    Results,
+}
+
+impl Default for SearchFocus {
+    fn default() -> Self { SearchFocus::Field(0) }
+}
+
+pub struct SearchForm {
+    pub values: [String; 8],
+    pub local: bool,
+    pub tidal: bool,
+}
+
+impl Default for SearchForm {
+    fn default() -> Self {
+        Self { values: Default::default(), local: true, tidal: true }
+    }
+}
+
+impl SearchForm {
+    pub fn get(&self, f: SearchField) -> &str {
+        &self.values[f as usize]
+    }
+    pub fn get_mut(&mut self, f: SearchField) -> &mut String {
+        &mut self.values[f as usize]
+    }
+    pub fn reset(&mut self) {
+        for v in &mut self.values { v.clear(); }
+        self.local = true;
+        self.tidal = true;
+    }
+}
+
 #[derive(Default)]
 pub struct SearchState {
-    pub input: String,
-    pub editing: bool,
+    pub form: SearchForm,
+    pub focus: SearchFocus,
     pub results: Vec<crate::mopidy::models::SearchResult>,
     pub flat: Vec<SearchHit>,
     pub state: ListState,
@@ -414,15 +510,13 @@ impl App {
         if self.view != v {
             self.prev_view = self.view;
             self.view = v;
-            // Arriving at Search with no query → drop straight into edit mode
-            // so the user can just start typing. Leaving Search always exits
-            // edit mode so global keys (`q`, etc.) work again.
+            // Arriving at Search lands focus on the first form field so the
+            // user can start typing immediately. Leaving Search drops focus
+            // back to the form so global keys behave normally next time.
             if v == View::Search {
-                if self.search.input.is_empty() {
-                    self.search.editing = true;
+                if !matches!(self.search.focus, SearchFocus::Results) {
+                    self.search.focus = SearchFocus::Field(0);
                 }
-            } else {
-                self.search.editing = false;
             }
         }
     }
@@ -528,7 +622,7 @@ pub enum Cmd {
     SaveQueueAs(String),
     DeletePlaylist(String),
     RefreshLibrary(Option<String>),
-    Search(String),
+    Search,
     LoadGoodies,
     FetchCover(String),
     ToggleFavoriteAlbum(String),

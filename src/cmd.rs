@@ -105,7 +105,7 @@ pub async fn apply(app: &mut App, cmd: Cmd) -> Result<()> {
             );
             app.status.flash("library refresh requested", crate::app::StatusKind::Ok);
         }
-        Cmd::Search(q) => search(app, q).await,
+        Cmd::Search => search(app).await,
         Cmd::LoadGoodies => load_goodies(app).await,
         Cmd::FetchCover(uri) => fetch_cover_async(app, uri),
         Cmd::ToggleFavoriteAlbum(uri) => toggle_favorite_album(app, uri).await,
@@ -321,13 +321,63 @@ pub async fn add_uris(app: &mut App, uris: Vec<String>) {
 
 // ─── search ─────────────────────────────────────────────────────────────────
 
-pub async fn search(app: &mut App, query: String) {
-    match app.client.search(&query, None).await {
+pub async fn search(app: &mut App) {
+    use crate::app::SearchField;
+    use std::collections::HashMap;
+
+    // Build per-field query map. Mopidy expects Vec<String> per key — we
+    // pass a single phrase per filled field; users wanting multi-term AND
+    // can just type a longer phrase since search is "contains" by default.
+    let mut query: HashMap<String, Vec<String>> = HashMap::new();
+    let mut label_parts: Vec<String> = Vec::new();
+    for f in SearchField::ALL {
+        let v = app.search.form.get(f).trim();
+        if v.is_empty() { continue; }
+        query.insert(f.mopidy_key().to_string(), vec![v.to_string()]);
+        label_parts.push(format!("{}:{v}", f.label().to_lowercase()));
+    }
+
+    if query.is_empty() {
+        app.status.flash("search: fill at least one field", crate::app::StatusKind::Warn);
+        return;
+    }
+
+    let form = &app.search.form;
+    let uris: Option<Vec<String>> = match (form.local, form.tidal) {
+        (true, true) => None, // search everywhere
+        (true, false) => Some(vec!["local:".into(), "file:".into(), "m3u:".into()]),
+        (false, true) => Some(vec!["tidal:".into()]),
+        (false, false) => {
+            app.status.flash("search: enable Local or Tidal", crate::app::StatusKind::Warn);
+            return;
+        }
+    };
+
+    match app.client.search_query(query, uris, false).await {
         Ok(results) => {
             let mut flat: Vec<SearchHit> = Vec::new();
             for r in &results {
-                for a in &r.albums {
-                    flat.push(SearchHit::Album(a.clone()));
+                // Mopidy-Local only fills `tracks` on search hits — derive
+                // distinct albums from the tracks so the user sees both. We
+                // dedupe by album URI to avoid one entry per matching track.
+                if r.albums.is_empty() && !r.tracks.is_empty() {
+                    let mut seen: std::collections::HashSet<String> =
+                        std::collections::HashSet::new();
+                    for t in &r.tracks {
+                        let Some(album) = &t.album else { continue };
+                        let Some(uri) = album.uri.as_deref() else { continue };
+                        if !seen.insert(uri.to_string()) { continue }
+                        let mut a = album.clone();
+                        // Tracks from local often have an album without
+                        // artists; fall back to the track's artists so the
+                        // result row isn't blank.
+                        if a.artists.is_empty() { a.artists = t.artists.clone(); }
+                        flat.push(SearchHit::Album(a));
+                    }
+                } else {
+                    for a in &r.albums {
+                        flat.push(SearchHit::Album(a.clone()));
+                    }
                 }
                 for a in &r.artists {
                     flat.push(SearchHit::Artist(a.clone()));
@@ -340,7 +390,7 @@ pub async fn search(app: &mut App, query: String) {
             if !flat.is_empty() {
                 app.search.state.select(Some(0));
             }
-            app.search.last_query = Some(query);
+            app.search.last_query = Some(label_parts.join(" · "));
             app.search.results = results;
             app.search.flat = flat;
         }

@@ -38,6 +38,11 @@ base64 = "0.22"
 unicode-width = "0.2"
 rustfft = "6"
 
+# MPRIS (D-Bus) integration — Linux only. Lets KDE/GNOME/Waybar/Polybar talk
+# to mopytui as a regular media player.
+[target.'cfg(target_os = "linux")'.dependencies]
+mpris-server = "0.9"
+
 [features]
 default = []
 # Enable better halfblocks rendering on terminals without Kitty/iTerm2/Sixel

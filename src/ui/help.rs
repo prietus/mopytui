@@ -55,9 +55,13 @@ const ROWS: &[(&str, &str)] = &[
     ("Z", "shuffle queue"),
     ("", ""),
     ("Search", ""),
-    ("/", "open search (any source)"),
-    ("Esc", "leave edit mode / clear"),
-    ("Enter", "play or add results"),
+    ("/", "open search (focus first field)"),
+    ("↑/↓ Tab", "navigate fields · sources · buttons · results"),
+    ("type", "edit focused field"),
+    ("Space", "toggle Local/Tidal checkbox"),
+    ("Enter", "run search (form) · play/open (result)"),
+    ("Esc", "jump to results (or Search button if empty)"),
+    ("p / a / f", "play · add · favorite (on result)"),
 ];
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {

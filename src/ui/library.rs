@@ -17,16 +17,21 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn render_entries(f: &mut Frame, app: &mut App, area: Rect) {
-    let title = if app.library.crumbs.is_empty() {
-        " Library ".to_string()
-    } else {
+    // The first crumb is the synthetic "Library" root; skip it so the title
+    // doesn't read "Library › Library › …".
+    let title = {
         let path: Vec<&str> = app
             .library
             .crumbs
             .iter()
+            .skip(1)
             .map(|(_, n)| n.as_str())
             .collect();
-        format!(" Library › {} ", path.join(" › "))
+        if path.is_empty() {
+            " Library ".to_string()
+        } else {
+            format!(" Library › {} ", path.join(" › "))
+        }
     };
 
     let favs = &app.goodies.favorites;

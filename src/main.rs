@@ -21,6 +21,7 @@ mod input;
 mod lyrics;
 mod metadata;
 mod mopidy;
+mod mpris;
 mod ui;
 
 use app::{App, Cmd};
@@ -86,13 +87,19 @@ async fn main() -> Result<()> {
     // Initial fetches before the first frame so we don't render a blank UI.
     cmd::refresh_all(&mut app).await;
 
+    // MPRIS bridge (Linux only — no-op stub elsewhere). Commands triggered
+    // from D-Bus arrive on this mpsc and feed into the same Cmd executor as
+    // local key presses.
+    let (mpris_cmd_tx, mpris_cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Cmd>();
+    let mpris_handle = mpris::spawn(mpris_cmd_tx);
+
     // 250ms tick keeps the progress bar fluid enough at 4 fps while
     // reducing terminal-paint pressure — iTerm2 flickers embedded images
     // when there's constant escape traffic from other cells (the waveform
     // gradient, playhead) at 10 Hz.
-    let mut events = Events::new(mpd_rx, 250);
+    let mut events = Events::new(mpd_rx, mpris_cmd_rx, 250);
 
-    let res = run(&mut terminal, &mut app, &mut events).await;
+    let res = run(&mut terminal, &mut app, &mut events, &mpris_handle).await;
 
     restore_terminal()?;
     res
@@ -160,17 +167,18 @@ async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     events: &mut Events,
+    mpris: &mpris::MprisHandle,
 ) -> Result<()> {
     loop {
         terminal.draw(|f| ui::render(f, app))?;
         let ev = events.next().await;
-        handle(app, ev).await?;
+        handle(app, ev, mpris).await?;
         if app.quit { break; }
     }
     Ok(())
 }
 
-async fn handle(app: &mut App, ev: AppEvent) -> Result<()> {
+async fn handle(app: &mut App, ev: AppEvent, mpris: &mpris::MprisHandle) -> Result<()> {
     match ev {
         AppEvent::Tick => {
             app.tick_local_elapsed();
@@ -183,7 +191,12 @@ async fn handle(app: &mut App, ev: AppEvent) -> Result<()> {
             // Ratatui auto-handles via draw; just trigger one redraw.
         }
         AppEvent::Mpd(ev) => apply_mpd(app, ev).await,
+        AppEvent::Cmd(cmd) => cmd::apply(app, cmd).await?,
     }
+    // Push the latest playback state to MPRIS after every event. The bridge
+    // task dedupes internally, so a chatty 4 Hz tick costs essentially
+    // nothing.
+    mpris.update(mpris::snapshot(app));
     Ok(())
 }
 

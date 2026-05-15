@@ -4,13 +4,14 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use crate::app::{App, Cmd, LibraryFocus, PlaylistsFocus, View};
+use crate::app::{App, Cmd, LibraryFocus, PlaylistsFocus, SearchFocus, View};
 use crate::mopidy::models::PlayState;
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Cmd {
-    // Edit mode owns the keyboard.
-    if app.view == View::Search && app.search.editing {
-        return handle_search_edit(app, key);
+    // The Search form owns the keyboard when focus is on a text field —
+    // otherwise plain letters would trigger global shortcuts (`q` quit, etc).
+    if app.view == View::Search && matches!(app.search.focus, SearchFocus::Field(_)) {
+        return handle_search_field(app, key);
     }
 
     if let Some(g) = global_key(app, key) {
@@ -21,7 +22,7 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Cmd {
         View::Library => handle_library(app, key),
         View::Albums => handle_albums(app, key),
         View::Queue => handle_queue(app, key),
-        View::Search => handle_search_list(app, key),
+        View::Search => handle_search(app, key),
         View::Playlists => handle_playlists(app, key),
         View::NowPlaying => handle_now_playing(app, key),
         View::Goodies => handle_goodies(app, key),
@@ -163,13 +164,13 @@ fn global_key(app: &mut App, key: KeyEvent) -> Option<Cmd> {
         KeyCode::Char('4') => { app.set_view(View::Playlists); Some(Cmd::LoadPlaylists) }
         KeyCode::Char('5') => {
             app.set_view(View::Search);
-            app.search.editing = true;
+            app.search.focus = SearchFocus::Field(0);
             Some(Cmd::None)
         }
         KeyCode::Char('6') => { app.set_view(View::NowPlaying); Some(Cmd::None) }
         KeyCode::Char('7') => { app.set_view(View::Goodies); Some(Cmd::LoadGoodies) }
         KeyCode::Char('8') => { app.set_view(View::Info); Some(Cmd::None) }
-        KeyCode::Tab => {
+        KeyCode::Tab if app.view != View::Search => {
             let next = match app.view {
                 View::Queue => View::Albums,
                 View::Albums => View::Library,
@@ -187,8 +188,9 @@ fn global_key(app: &mut App, key: KeyEvent) -> Option<Cmd> {
             }
             Some(Cmd::None)
         }
-        // Playback globals (work from any view except Search-edit).
-        KeyCode::Char(' ') => Some(Cmd::TogglePlayPause),
+        // Playback globals (work from any view except the Search form, which
+        // owns Space/Enter for checkboxes and buttons).
+        KeyCode::Char(' ') if app.view != View::Search => Some(Cmd::TogglePlayPause),
         KeyCode::Char('s') if !matches!(app.view, View::Library | View::Search) => Some(Cmd::Stop),
         // `<` / `>` for prev/next — `p` stays free for "play" in
         // Albums grid, Albums detail, and Search results. `n` is also
@@ -257,6 +259,15 @@ fn handle_library(app: &mut App, key: KeyEvent) -> Cmd {
             Cmd::None
         }
         KeyCode::Enter => library_open_selected(app),
+        // From the Tracks panel, Backspace/Esc/h returns focus to Entries
+        // instead of navigating the crumbs up — much closer to the muscle
+        // memory people have from two-pane file managers and ncmpcpp.
+        KeyCode::Backspace | KeyCode::Esc | KeyCode::Char('h')
+            if app.library.focus == LibraryFocus::Tracks =>
+        {
+            app.library.focus = LibraryFocus::Entries;
+            Cmd::None
+        }
         KeyCode::Backspace | KeyCode::Char('h') => Cmd::BrowseUp,
         KeyCode::Char('a') | KeyCode::Char('A') => library_add_selected(app, key.code == KeyCode::Char('A')),
         KeyCode::Char('f') => {
@@ -278,7 +289,7 @@ fn handle_library(app: &mut App, key: KeyEvent) -> Cmd {
         }
         KeyCode::Char('/') => {
             app.set_view(View::Search);
-            app.search.editing = true;
+            app.search.focus = SearchFocus::Field(0);
             Cmd::None
         }
         _ => Cmd::None,
@@ -318,7 +329,12 @@ fn library_open_selected(app: &mut App) -> Cmd {
             let Some(idx) = app.library.entries_state.selected() else { return Cmd::None };
             let Some(e) = app.library.entries.get(idx).cloned() else { return Cmd::None };
             match e.kind.as_str() {
-                "directory" => Cmd::BrowseInto(Some(e.uri), e.name),
+                // Mopidy-Local exposes artists, composers, genres, etc. as
+                // browsable refs that drill down into albums. Treat them the
+                // same as a directory so Enter steps in.
+                "directory" | "artist" | "composer" | "genre" | "year" => {
+                    Cmd::BrowseInto(Some(e.uri), e.name)
+                }
                 "album" => Cmd::OpenAlbum(e.uri),
                 "track" => Cmd::Add(vec![e.uri]),
                 "playlist" => Cmd::OpenPlaylist(e.uri),
@@ -391,86 +407,182 @@ fn handle_queue(app: &mut App, key: KeyEvent) -> Cmd {
     }
 }
 
-fn handle_search_edit(app: &mut App, key: KeyEvent) -> Cmd {
+/// Linear focus order for the form. Used by ↑/↓/Tab navigation.
+const SEARCH_FOCUS_ORDER: &[SearchFocus] = &[
+    SearchFocus::Field(0),
+    SearchFocus::Field(1),
+    SearchFocus::Field(2),
+    SearchFocus::Field(3),
+    SearchFocus::Field(4),
+    SearchFocus::Field(5),
+    SearchFocus::Field(6),
+    SearchFocus::Field(7),
+    SearchFocus::Source(0),
+    SearchFocus::Source(1),
+    SearchFocus::SearchBtn,
+    SearchFocus::ResetBtn,
+    SearchFocus::Results,
+];
+
+fn focus_index(f: SearchFocus) -> usize {
+    SEARCH_FOCUS_ORDER.iter().position(|x| *x == f).unwrap_or(0)
+}
+
+fn move_focus(app: &mut App, delta: i32) {
+    let cur = focus_index(app.search.focus) as i32;
+    let len = SEARCH_FOCUS_ORDER.len() as i32;
+    let next = (cur + delta).clamp(0, len - 1) as usize;
+    let target = SEARCH_FOCUS_ORDER[next];
+    // Don't jump into Results when there are none — feels broken.
+    if matches!(target, SearchFocus::Results) && app.search.flat.is_empty() {
+        return;
+    }
+    app.search.focus = target;
+}
+
+/// Field focus — typed characters edit the buffer. Arrows/Tab still navigate.
+fn handle_search_field(app: &mut App, key: KeyEvent) -> Cmd {
+    use crate::app::SearchField;
+    let SearchFocus::Field(idx) = app.search.focus else { return Cmd::None };
+    let field = SearchField::ALL[idx];
     match key.code {
         KeyCode::Esc => {
-            app.search.editing = false;
+            // Bail out to the Results list if we have any, otherwise to the
+            // Search button so the user can still trigger a query.
+            app.search.focus = if app.search.flat.is_empty() {
+                SearchFocus::SearchBtn
+            } else {
+                SearchFocus::Results
+            };
             Cmd::None
         }
-        KeyCode::Enter => {
-            app.search.editing = false;
-            if app.search.input.trim().is_empty() {
-                Cmd::None
-            } else {
-                Cmd::Search(app.search.input.clone())
-            }
+        KeyCode::Enter => Cmd::Search,
+        KeyCode::Up => { move_focus(app, -1); Cmd::None }
+        KeyCode::Down | KeyCode::Tab => { move_focus(app, 1); Cmd::None }
+        KeyCode::BackTab => { move_focus(app, -1); Cmd::None }
+        KeyCode::Backspace => {
+            app.search.form.get_mut(field).pop();
+            Cmd::None
         }
-        KeyCode::Backspace => { app.search.input.pop(); Cmd::None }
-        KeyCode::Char(c) => { app.search.input.push(c); Cmd::None }
+        KeyCode::Char(c) => {
+            // No Ctrl-modified printables — those are still global shortcuts.
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                return Cmd::None;
+            }
+            app.search.form.get_mut(field).push(c);
+            Cmd::None
+        }
         _ => Cmd::None,
     }
 }
 
-fn handle_search_list(app: &mut App, key: KeyEvent) -> Cmd {
+/// Form-level handler for non-Field focus (Sources, buttons, Results).
+fn handle_search(app: &mut App, key: KeyEvent) -> Cmd {
     use crate::app::SearchHit;
-    let len = app.search.flat.len();
-    match key.code {
-        KeyCode::Char('/') => { app.search.editing = true; Cmd::None }
-        KeyCode::Down | KeyCode::Char('j') => {
-            let cur = app.search.state.selected().unwrap_or(0) as i32;
-            let next = (cur + 1).clamp(0, len.saturating_sub(1) as i32) as usize;
-            app.search.state.select(Some(next));
-            Cmd::None
-        }
-        KeyCode::Up | KeyCode::Char('k') => {
-            let cur = app.search.state.selected().unwrap_or(0) as i32;
-            let next = (cur - 1).clamp(0, len.saturating_sub(1) as i32) as usize;
-            app.search.state.select(Some(next));
-            Cmd::None
-        }
-        KeyCode::Enter => {
-            let Some(i) = app.search.state.selected() else { return Cmd::None };
-            match app.search.flat.get(i) {
-                Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
-                Some(SearchHit::Album(a)) => a.uri.clone().map(|u| Cmd::OpenAlbum(u)).unwrap_or(Cmd::None),
-                Some(SearchHit::Artist(a)) => a.uri.clone().map(|u| Cmd::BrowseInto(Some(u), a.name.clone())).unwrap_or(Cmd::None),
-                None => Cmd::None,
+    match app.search.focus {
+        SearchFocus::Field(_) => Cmd::None, // unreachable: caught in dispatcher
+        SearchFocus::Source(side) => match key.code {
+            KeyCode::Up => { move_focus(app, -1); Cmd::None }
+            KeyCode::Down | KeyCode::Tab => { move_focus(app, 1); Cmd::None }
+            KeyCode::BackTab => { move_focus(app, -1); Cmd::None }
+            KeyCode::Left => { app.search.focus = SearchFocus::Source(0); Cmd::None }
+            KeyCode::Right => { app.search.focus = SearchFocus::Source(1); Cmd::None }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                if side == 0 { app.search.form.local = !app.search.form.local; }
+                else { app.search.form.tidal = !app.search.form.tidal; }
+                Cmd::None
             }
-        }
-        KeyCode::Char('f') => {
-            let Some(i) = app.search.state.selected() else { return Cmd::None };
-            match app.search.flat.get(i) {
-                Some(SearchHit::Album(a)) => a
-                    .uri
-                    .clone()
-                    .map(Cmd::ToggleFavoriteAlbum)
-                    .unwrap_or(Cmd::None),
-                Some(SearchHit::Track(t)) => {
-                    // Fall back to the track's album URI.
-                    t.album.as_ref().and_then(|al| al.uri.clone())
-                        .map(Cmd::ToggleFavoriteAlbum)
-                        .unwrap_or(Cmd::None)
+            _ => Cmd::None,
+        },
+        SearchFocus::SearchBtn => match key.code {
+            KeyCode::Up => { move_focus(app, -1); Cmd::None }
+            KeyCode::Down | KeyCode::Tab => { move_focus(app, 1); Cmd::None }
+            KeyCode::BackTab => { move_focus(app, -1); Cmd::None }
+            KeyCode::Left | KeyCode::Right => {
+                app.search.focus = SearchFocus::ResetBtn;
+                Cmd::None
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => Cmd::Search,
+            _ => Cmd::None,
+        },
+        SearchFocus::ResetBtn => match key.code {
+            KeyCode::Up => { move_focus(app, -1); Cmd::None }
+            KeyCode::Down | KeyCode::Tab => { move_focus(app, 1); Cmd::None }
+            KeyCode::BackTab => { move_focus(app, -1); Cmd::None }
+            KeyCode::Left | KeyCode::Right => {
+                app.search.focus = SearchFocus::SearchBtn;
+                Cmd::None
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                app.search.form.reset();
+                app.search.focus = SearchFocus::Field(0);
+                Cmd::None
+            }
+            _ => Cmd::None,
+        },
+        SearchFocus::Results => {
+            let len = app.search.flat.len();
+            match key.code {
+                KeyCode::Char('/') => {
+                    app.search.focus = SearchFocus::Field(0);
+                    Cmd::None
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let cur = app.search.state.selected().unwrap_or(0) as i32;
+                    if cur == 0 {
+                        // Bounce up into the form when at the top of results.
+                        app.search.focus = SearchFocus::SearchBtn;
+                    } else {
+                        let next = (cur - 1).max(0) as usize;
+                        app.search.state.select(Some(next));
+                    }
+                    Cmd::None
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let cur = app.search.state.selected().unwrap_or(0) as i32;
+                    let next = (cur + 1).clamp(0, len.saturating_sub(1) as i32) as usize;
+                    app.search.state.select(Some(next));
+                    Cmd::None
+                }
+                KeyCode::BackTab => { move_focus(app, -1); Cmd::None }
+                KeyCode::Tab => { move_focus(app, 1); Cmd::None }
+                KeyCode::Enter => {
+                    let Some(i) = app.search.state.selected() else { return Cmd::None };
+                    match app.search.flat.get(i) {
+                        Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
+                        Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::OpenAlbum).unwrap_or(Cmd::None),
+                        Some(SearchHit::Artist(a)) => a.uri.clone().map(|u| Cmd::BrowseInto(Some(u), a.name.clone())).unwrap_or(Cmd::None),
+                        None => Cmd::None,
+                    }
+                }
+                KeyCode::Char('f') => {
+                    let Some(i) = app.search.state.selected() else { return Cmd::None };
+                    match app.search.flat.get(i) {
+                        Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::ToggleFavoriteAlbum).unwrap_or(Cmd::None),
+                        Some(SearchHit::Track(t)) => t.album.as_ref().and_then(|al| al.uri.clone())
+                            .map(Cmd::ToggleFavoriteAlbum).unwrap_or(Cmd::None),
+                        _ => Cmd::None,
+                    }
+                }
+                KeyCode::Char('p') => {
+                    let Some(i) = app.search.state.selected() else { return Cmd::None };
+                    match app.search.flat.get(i) {
+                        Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::PlayAlbum).unwrap_or(Cmd::None),
+                        Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
+                        _ => Cmd::None,
+                    }
+                }
+                KeyCode::Char('a') => {
+                    let Some(i) = app.search.state.selected() else { return Cmd::None };
+                    match app.search.flat.get(i) {
+                        Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::QueueAlbum).unwrap_or(Cmd::None),
+                        Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
+                        _ => Cmd::None,
+                    }
                 }
                 _ => Cmd::None,
             }
         }
-        KeyCode::Char('p') => {
-            let Some(i) = app.search.state.selected() else { return Cmd::None };
-            match app.search.flat.get(i) {
-                Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::PlayAlbum).unwrap_or(Cmd::None),
-                Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
-                _ => Cmd::None,
-            }
-        }
-        KeyCode::Char('a') => {
-            let Some(i) = app.search.state.selected() else { return Cmd::None };
-            match app.search.flat.get(i) {
-                Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::QueueAlbum).unwrap_or(Cmd::None),
-                Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
-                _ => Cmd::None,
-            }
-        }
-        _ => Cmd::None,
     }
 }
 
