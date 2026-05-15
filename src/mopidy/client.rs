@@ -6,8 +6,19 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::models::{
-    Image, LibRef, Modes, PlayState, PlaybackSnapshot, Playlist, Ref, SearchResult, TlTrack, Track,
+    AudioFormat, Image, LibRef, Modes, PlayState, PlaybackSnapshot, Playlist, Ref, SearchResult,
+    TlTrack, Track,
 };
+
+/// Combined snapshot of mopidy's audio sink as reported by `tidal_goodies >=
+/// 0.4.0` (`GET /audio/active`). Contains the DAC label, the live GStreamer
+/// caps, and a synthesized verdict about whether the chain is bit-perfect.
+#[derive(Debug, Clone, Default)]
+pub struct AudioActive {
+    pub dac_label: Option<String>,
+    pub format: Option<AudioFormat>,
+    pub verdict: Option<String>,
+}
 
 #[derive(Clone)]
 pub struct Client {
@@ -488,5 +499,43 @@ impl Client {
             .error_for_status()?
             .json()
             .await?)
+    }
+
+    /// Live snapshot of mopidy's audio sink. Requires `tidal_goodies >= 0.4.0`
+    /// (`/audio/active`). Mopidy's MPD frontend does not expose `audio:` in
+    /// `status` against Mopidy 4.0.0a2, so this is the only path to a real
+    /// sample-rate / bit-depth / DAC for the current track.
+    pub async fn goodies_audio_active(&self) -> Result<Option<AudioActive>> {
+        let resp = self.inner.get(self.goodies_url("/audio/active")).send().await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let v: Value = resp.error_for_status()?.json().await?;
+        let dac_label = ["/output/card/name", "/output/card/id", "/output/device"]
+            .iter()
+            .find_map(|p| {
+                v.pointer(p)
+                    .and_then(|x| x.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+            });
+        let active = v.get("active").and_then(|x| x.as_bool()).unwrap_or(false);
+        let format = if active {
+            v.pointer("/format").and_then(|f| {
+                let rate = f.get("rate")?.as_u64()? as u32;
+                let bits = f.get("bits")?.as_u64()? as u32;
+                let channels = f.get("channels")?.as_u64()? as u32;
+                if rate == 0 { return None; }
+                Some(AudioFormat { rate, bits, channels })
+            })
+        } else {
+            None
+        };
+        let verdict = v
+            .pointer("/chain/verdict")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        Ok(Some(AudioActive { dac_label, format, verdict }))
     }
 }

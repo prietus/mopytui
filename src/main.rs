@@ -229,8 +229,16 @@ async fn apply_mpd(app: &mut App, ev: MpdEvent) {
             if want_playlists { cmd::load_playlists(app).await; }
         }
         MpdEvent::Audio { audio, bitrate } => {
-            app.audio = audio;
-            app.bitrate = bitrate;
+            // Only overwrite when MPD actually has the info. Mopidy 4.0.0a2 +
+            // mopidy-mpd 3.3.0 leave `audio:` empty and report `bitrate: 0`
+            // for every track — accepting those would clobber the live chain
+            // we populate from the `tidal_goodies` `/audio/active` endpoint.
+            if let Some(a) = audio.filter(|a| a.rate > 0) {
+                app.audio = Some(a);
+            }
+            if let Some(b) = bitrate.filter(|b| *b > 0) {
+                app.bitrate = Some(b);
+            }
         }
     }
 }

@@ -57,6 +57,7 @@ fn render_state_box(f: &mut Frame, app: &App, area: Rect) {
         .as_ref()
         .and_then(|t| t.bitrate)
         .or(app.bitrate)
+        .filter(|b| *b > 0)
         .map(|b| format!("  ·  {b} kbps"))
         .unwrap_or_default();
     let mut chip_extra = String::new();

@@ -41,13 +41,107 @@ fn render_cover_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
+    // The chain box (DAC + format + verdict) shows up when the
+    // `tidal_goodies` plugin has answered with at least a DAC label.
+    // Without the plugin, the chain info collapses back into the
+    // inline meta line under the cover.
+    let has_chain_box = app.dac_label.is_some();
+    let meta_total = if has_chain_box { 12 } else { 8 };
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(6)])
+        .constraints([Constraint::Min(8), Constraint::Length(meta_total)])
         .split(inner);
 
     crate::images::render_cover_widget(f, app, rows[0]);
-    render_meta_under_cover(f, app, rows[1]);
+
+    if has_chain_box {
+        let meta_rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(4), Constraint::Length(5)])
+            .split(rows[1]);
+        render_meta_under_cover(f, app, meta_rows[0]);
+        render_chain_box(f, app, meta_rows[1]);
+    } else {
+        render_meta_under_cover(f, app, rows[1]);
+    }
+}
+
+fn render_chain_box(f: &mut Frame, app: &App, area: Rect) {
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(app.theme.accent))
+        .padding(Padding::horizontal(1));
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    let Some(t) = &app.playback.current else { return; };
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Line 1 — DAC name in bold, the headline of the box.
+    if let Some(dac) = &app.dac_label {
+        lines.push(Line::from(Span::styled(
+            dac.clone(),
+            Style::default()
+                .fg(app.theme.fg_strong)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+
+    // Line 2 — format · kHz · bit-depth. Format is inferred from the URI
+    // (FLAC, MP3, Tidal, …); rate and bits come from `/audio/active`.
+    let fmt = fmt_from_uri(&t.uri);
+    let audio = app.audio.as_ref().filter(|a| a.rate > 0);
+    let muted = Style::default().fg(app.theme.fg_muted);
+    let sep = Span::styled("  ·  ", muted);
+    let mut chain: Vec<Span> = Vec::new();
+    if let Some(f) = fmt {
+        chain.push(Span::styled(
+            f,
+            Style::default()
+                .fg(app.theme.accent_alt)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    if let Some(a) = audio {
+        let khz = a.rate as f32 / 1000.0;
+        let khz_s = if (khz - khz.round()).abs() < 0.05 {
+            format!("{:.0} kHz", khz)
+        } else {
+            format!("{:.1} kHz", khz)
+        };
+        if !chain.is_empty() { chain.push(sep.clone()); }
+        chain.push(Span::styled(khz_s, Style::default().fg(app.theme.fg)));
+        if a.bits > 0 {
+            chain.push(sep.clone());
+            chain.push(Span::styled(
+                format!("{}-bit", a.bits),
+                Style::default().fg(app.theme.fg),
+            ));
+        }
+    }
+    if !chain.is_empty() {
+        lines.push(Line::from(chain));
+    }
+
+    // Line 3 — verdict pill. Green dot + label when bit-perfect, warn
+    // otherwise so a degraded chain reads as a soft warning.
+    if let Some(v) = &app.audio_verdict {
+        let (dot_color, text_color) = if v == "bit-perfect" {
+            (app.theme.ok, app.theme.ok)
+        } else {
+            (app.theme.warn, app.theme.warn)
+        };
+        lines.push(Line::from(vec![
+            Span::styled("● ", Style::default().fg(dot_color)),
+            Span::styled(
+                v.clone(),
+                Style::default().fg(text_color).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+
+    f.render_widget(Paragraph::new(lines), inner);
 }
 
 fn render_meta_under_cover(f: &mut Frame, app: &App, area: Rect) {
@@ -89,6 +183,45 @@ fn render_meta_under_cover(f: &mut Frame, app: &App, area: Rect) {
         )));
     }
 
+    // Audio chain (codec · bitrate · samplerate/bitdepth). When the
+    // `tidal_goodies` plugin is present we render this inside the dedicated
+    // chain box below — this inline copy is the fallback for setups without
+    // the plugin so users without it still see at least the codec.
+    let fmt = fmt_from_uri(&t.uri);
+    let bitrate = t.bitrate.or(app.bitrate).filter(|b| *b > 0);
+    let audio = app.audio.as_ref().filter(|a| a.rate > 0);
+    let has_chain_box = app.dac_label.is_some();
+    if !has_chain_box && (fmt.is_some() || bitrate.is_some() || audio.is_some()) {
+        let muted = Style::default().fg(app.theme.fg_muted);
+        let sep = Span::styled("  ·  ", muted);
+        let mut spans: Vec<Span> = Vec::new();
+        if let Some(f) = fmt {
+            spans.push(Span::styled(
+                f,
+                Style::default().fg(app.theme.accent_alt).add_modifier(Modifier::BOLD),
+            ));
+        }
+        if let Some(b) = bitrate {
+            if !spans.is_empty() { spans.push(sep.clone()); }
+            spans.push(Span::styled(format!("{b} kbps"), muted));
+        }
+        if let Some(a) = audio {
+            let khz = a.rate as f32 / 1000.0;
+            let khz_s = if (khz - khz.round()).abs() < 0.05 {
+                format!("{:.0} kHz", khz)
+            } else {
+                format!("{:.1} kHz", khz)
+            };
+            if !spans.is_empty() { spans.push(sep.clone()); }
+            spans.push(Span::styled(khz_s, muted));
+            if a.bits > 0 {
+                spans.push(sep.clone());
+                spans.push(Span::styled(format!("{}-bit", a.bits), muted));
+            }
+        }
+        lines.push(Line::from(spans));
+    }
+
     // Played-count if we recognise the track in goodies stats.
     if let Some(c) = goodies_play_count(app, &t.uri) {
         lines.push(Line::from(""));
@@ -107,6 +240,34 @@ fn render_meta_under_cover(f: &mut Frame, app: &App, area: Rect) {
     }
 
     f.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }), inner);
+}
+
+/// Best-effort codec label from the track URI. Mopidy doesn't expose the
+/// actual GStreamer caps via MPD or JSON-RPC, so we infer from the file
+/// extension for local tracks and from the URI scheme for streams.
+fn fmt_from_uri(uri: &str) -> Option<&'static str> {
+    if uri.starts_with("tidal:") {
+        return Some("Tidal");
+    }
+    if uri.starts_with("http://") || uri.starts_with("https://") {
+        return Some("Stream");
+    }
+    let ext = uri.rsplit('.').next()?.to_ascii_lowercase();
+    match ext.as_str() {
+        "flac" => Some("FLAC"),
+        "mp3"  => Some("MP3"),
+        "m4a" | "mp4" => Some("M4A"),
+        "alac" => Some("ALAC"),
+        "aac"  => Some("AAC"),
+        "ogg" | "oga" => Some("OGG"),
+        "opus" => Some("OPUS"),
+        "wav"  => Some("WAV"),
+        "aif" | "aiff" => Some("AIFF"),
+        "dsf" | "dff" => Some("DSD"),
+        "wv"   => Some("WV"),
+        "ape"  => Some("APE"),
+        _ => None,
+    }
 }
 
 fn goodies_play_count(app: &App, uri: &str) -> Option<u32> {

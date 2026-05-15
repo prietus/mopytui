@@ -165,6 +165,14 @@ pub async fn refresh_playback(app: &mut App) {
                     schedule_metadata_for_track(app, &t);
                 }
             }
+            // Pull fresh chain info every player event, not just on URI change.
+            // The GStreamer pipeline often hasn't negotiated caps yet on the
+            // first poll after a track change → `active: false` and no format.
+            // Subsequent play/seek events let us catch the real format once
+            // mopidy has it. `refresh_audio_active` only overwrites `app.audio`
+            // when the plugin returns a non-empty format, so paused/stopped
+            // states don't blank the last-known chain.
+            refresh_audio_active(app).await;
         }
         Err(e) => tracing::warn!("fetch_playback: {e}"),
     }
@@ -773,8 +781,34 @@ pub async fn check_goodies(app: &mut App) {
             app.goodies.available = true;
             // Pull favorites once so the ★ markers light up in library views.
             load_favorites(app).await;
+            // Initial audio snapshot — pulls DAC + live format + verdict.
+            // Requires tidal_goodies >= 0.4.0; older plugins return 404 → no-op.
+            refresh_audio_active(app).await;
         }
         _ => app.goodies.available = false,
+    }
+}
+
+/// Pull the live chain snapshot from `tidal_goodies /audio/active`. Updates
+/// `app.audio` (the live format), `app.dac_label`, and `app.audio_verdict`.
+/// Mopidy's MPD frontend doesn't emit `audio:` in `status` against Mopidy
+/// 4.0.0a2, so this endpoint is the only source of truth for rate/bits/channels.
+pub async fn refresh_audio_active(app: &mut App) {
+    if !app.goodies.available { return; }
+    match app.client.goodies_audio_active().await {
+        Ok(Some(a)) => {
+            if a.dac_label.is_some() {
+                app.dac_label = a.dac_label;
+            }
+            // `format` is None when no track is playing — keep last-known so
+            // the UI doesn't flash empty between tracks.
+            if a.format.is_some() {
+                app.audio = a.format;
+            }
+            app.audio_verdict = a.verdict;
+        }
+        Ok(None) => { /* older plugin without /audio/active */ }
+        Err(e) => tracing::debug!("goodies audio_active: {e}"),
     }
 }
 

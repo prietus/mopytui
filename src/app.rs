@@ -305,6 +305,11 @@ pub struct App {
     pub queue: Vec<TlTrack>,
     pub audio: Option<AudioFormat>,
     pub bitrate: Option<u32>,
+    /// Friendly ALSA card name behind mopidy's sink, fetched from the
+    /// `tidal_goodies` plugin's `/audio/active` endpoint when available.
+    pub dac_label: Option<String>,
+    /// Chain verdict from `tidal_goodies`: e.g. "bit-perfect", "resampled".
+    pub audio_verdict: Option<String>,
     pub connected: bool,
 
     pub library: LibraryState,
@@ -370,6 +375,8 @@ impl App {
             queue: Vec::new(),
             audio: None,
             bitrate: None,
+            dac_label: None,
+            audio_verdict: None,
             connected: false,
             library: LibraryState::default(),
             albums: AlbumsState::default(),
