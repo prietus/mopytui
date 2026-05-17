@@ -75,7 +75,10 @@ impl Client {
     pub fn rpc_url(&self) -> String { format!("{}/mopidy/rpc", self.base) }
 
     fn goodies_url(&self, suffix: &str) -> String {
-        format!("{}/tidal_goodies{suffix}", self.base)
+        // The plugin was renamed `mopidy-tidal-goodies` → `mopidy-goodies`
+        // in v0.6.0 and its HTTP routes moved from `/tidal_goodies/*` to
+        // `/goodies/*` at the same time.
+        format!("{}/goodies{suffix}", self.base)
     }
 
     pub fn image_url(&self, uri: &str) -> String {

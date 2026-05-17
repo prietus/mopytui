@@ -68,9 +68,15 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                 "pseudo",
             )
         };
-    let bar_w = (inner.width as usize) / BANDS;
-    let gap = if bar_w >= 3 { 1 } else { 0 };
-    let bar_w = bar_w.saturating_sub(gap).max(1);
+    // Fill `inner.width` exactly: each band gets `base_bar_w` cells, the
+    // first `extra` bands get +1 so leftover cells aren't wasted on the
+    // right. Gap (1 cell) sits between bars; no trailing gap after the last.
+    let total_w = inner.width as usize;
+    let gap = if total_w / BANDS >= 3 { 1 } else { 0 };
+    let between = (BANDS - 1) * gap;
+    let bar_budget = total_w.saturating_sub(between);
+    let base_bar_w = (bar_budget / BANDS).max(1);
+    let extra = bar_budget.saturating_sub(base_bar_w * BANDS);
 
     // Render row by row, from top of the panel to its base. For each row we
     // pick a sub-cell glyph based on how much of the bar reaches into it.
@@ -81,6 +87,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         let row_top = (inner.height - row) as f64;
         let row_bottom = row_top - 1.0;
         for (i, &h) in heights.iter().enumerate() {
+            let bar_w = if i < extra { base_bar_w + 1 } else { base_bar_w };
             let col = lerp_color(app.theme.accent_alt, app.theme.accent, i as f32 / BANDS as f32);
             let glyph = sub_cell_glyph(h, row_top, row_bottom);
             spans.push(Span::styled(
@@ -89,7 +96,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                     .fg(col)
                     .add_modifier(Modifier::BOLD),
             ));
-            spans.push(Span::raw(" ".repeat(gap)));
+            if i + 1 < BANDS {
+                spans.push(Span::raw(" ".repeat(gap)));
+            }
         }
         let r = Rect { x: inner.x, y, width: inner.width, height: 1 };
         f.render_widget(Paragraph::new(Line::from(spans)), r);

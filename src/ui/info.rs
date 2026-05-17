@@ -254,7 +254,7 @@ fn server_info(app: &App) -> Paragraph<'_> {
         Line::from(format!("  http://{}:{}", app.cfg.host, app.cfg.http_port)),
         Line::from(format!("  mpd  {}:{}", app.cfg.host, app.cfg.mpd_port)),
         Line::from(format!(
-            "  tidal_goodies: {}",
+            "  goodies: {}",
             if app.goodies.available { "available" } else { "not installed" }
         )),
         Line::from(""),

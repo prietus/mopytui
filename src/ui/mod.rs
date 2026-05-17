@@ -22,9 +22,9 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, View};
 
-/// Top-level render: persistent chrome (header → tabs → body → spectrum →
-/// progress → status). The spectrum only appears when something's playing
-/// and there's enough vertical real estate.
+/// Top-level render: persistent chrome (header → tabs → body → progress →
+/// status). The Queue view embeds the spectrum panel below its track table
+/// when a track is loaded and there's enough vertical room.
 pub fn render(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let h = area.height;

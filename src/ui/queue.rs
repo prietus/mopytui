@@ -26,9 +26,21 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
 
     if has_current {
         render_cover_panel(f, app, cols[0]);
-        render_queue_table(f, app, cols[1]);
+    }
+
+    let queue_col = if has_current { cols[1] } else { cols[0] };
+
+    // Spectrum panel below the queue table whenever a track is loaded and
+    // there's vertical room (10 rows = bordered frame + 8 rows of bars).
+    if app.playback.current.is_some() && queue_col.height >= 22 {
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(0), Constraint::Length(10)])
+            .split(queue_col);
+        render_queue_table(f, app, rows[0]);
+        crate::ui::spectrum::render(f, app, rows[1]);
     } else {
-        render_queue_table(f, app, cols[0]);
+        render_queue_table(f, app, queue_col);
     }
 }
 
