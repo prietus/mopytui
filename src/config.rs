@@ -31,6 +31,10 @@ pub struct AppConfig {
     /// Requires `mkfifo` and a `filesink` in mopidy's `output`.
     #[serde(default)]
     pub audio_pipe: Option<String>,
+    /// Default visualizer style for the spectrum panel: `bars`, `mirror`,
+    /// `dots`, or `wave`. Cycled at runtime with `v`.
+    #[serde(default)]
+    pub visualizer_style: Option<String>,
     #[serde(default)]
     pub lastfm_api_key: Option<String>,
     #[serde(default)]
@@ -55,6 +59,7 @@ impl Default for AppConfig {
             audio_udp: None,
             audio_tcp: None,
             audio_pipe: None,
+            visualizer_style: None,
             lastfm_api_key: None,
             fanart_api_key: None,
             discogs_token: None,
@@ -88,6 +93,13 @@ mpris = false
 # Alternatives (less reliable):
 # audio_tcp  = "127.0.0.1:5555"     # GStreamer tcpserversink
 # audio_pipe = "/tmp/mopidy.fifo"   # filesink + mkfifo
+
+# Default visualizer style on launch. Cycle at runtime with `v`.
+# bars   — vertical FFT bars (default)
+# mirror — bars mirrored above/below a centre axis
+# dots   — FFT bars in braille sub-pixels (2× horizontal × 4× vertical)
+# wave   — raw PCM waveform (braille line plot)
+# visualizer_style = "bars"
 
 # Optional API keys for richer metadata.
 # last.fm:   https://www.last.fm/api/account/create

@@ -45,6 +45,7 @@ const ROWS: &[(&str, &str)] = &[
     ("C", "toggle consume"),
     ("L", "toggle synced lyrics panel"),
     ("c", "toggle cover fit ↔ crop"),
+    ("v", "cycle visualizer style (bars · mirror · dots · wave)"),
     ("f", "toggle Tidal favorite (album / current track)"),
     ("", ""),
     ("Queue", ""),

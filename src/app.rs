@@ -26,6 +26,47 @@ pub enum CoverFitMode {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VisStyle {
+    /// Vertical bars per FFT band, anchored at the panel base.
+    Bars,
+    /// Bars mirrored above and below a horizontal centre axis.
+    Mirror,
+    /// FFT bars rendered with braille sub-pixels (2× horizontal, 4× vertical).
+    Dots,
+    /// Raw PCM waveform plotted around the centre axis.
+    Wave,
+}
+
+impl VisStyle {
+    pub fn from_config(s: Option<&str>) -> Self {
+        match s.map(|x| x.trim().to_ascii_lowercase()).as_deref() {
+            Some("mirror") => Self::Mirror,
+            Some("dots") | Some("braille") => Self::Dots,
+            Some("wave") | Some("waveform") | Some("scope") => Self::Wave,
+            _ => Self::Bars,
+        }
+    }
+
+    pub fn cycle(self) -> Self {
+        match self {
+            Self::Bars => Self::Mirror,
+            Self::Mirror => Self::Dots,
+            Self::Dots => Self::Wave,
+            Self::Wave => Self::Bars,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Bars => "bars",
+            Self::Mirror => "mirror",
+            Self::Dots => "dots",
+            Self::Wave => "wave",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
     Library,
     Albums,
@@ -422,6 +463,7 @@ pub struct App {
     pub cover_uri_for_current: Option<String>,
     pub cover_fit_mode: CoverFitMode,
     pub audio_reader: Option<Arc<AudioReader>>,
+    pub visualizer: VisStyle,
 
     /// Cached cover URIs (raw image URI as returned by core.library.get_images)
     /// keyed by track or album URI.
@@ -459,6 +501,7 @@ impl App {
         audio_reader: Option<Arc<AudioReader>>,
     ) -> Self {
         let theme = Theme::from_name(&cfg.theme);
+        let visualizer = VisStyle::from_config(cfg.visualizer_style.as_deref());
         Self {
             cfg,
             theme,
@@ -487,6 +530,7 @@ impl App {
             cover_uri_for_current: None,
             cover_fit_mode: CoverFitMode::Crop,
             audio_reader,
+            visualizer,
             cover_url_by_uri: HashMap::new(),
             lyrics_cache: LyricsCache::new(),
             lyrics: None,

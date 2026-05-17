@@ -235,6 +235,10 @@ fn global_key(app: &mut App, key: KeyEvent) -> Option<Cmd> {
         KeyCode::Char('r') if key.modifiers == KeyModifiers::CONTROL => {
             Some(Cmd::RefreshAll)
         }
+        KeyCode::Char('v') if app.view != View::Search => {
+            app.visualizer = app.visualizer.cycle();
+            Some(Cmd::None)
+        }
         _ => None,
     }
 }
