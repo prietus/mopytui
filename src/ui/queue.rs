@@ -53,15 +53,19 @@ fn render_cover_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    // The chain box (DAC + format + verdict) shows up when the
-    // `tidal_goodies` plugin has answered with at least a DAC label.
-    // Without the plugin, the chain info collapses back into the
-    // inline meta line under the cover.
+    // The chain box (DAC + format + verdict) shows up when the goodies
+    // plugin has answered with at least a DAC label. Without the plugin,
+    // the chain info collapses back into the inline meta line under the
+    // cover.
     let has_chain_box = app.dac_label.is_some();
-    let meta_total = if has_chain_box { 12 } else { 8 };
+    let chain_h: u16 = if has_chain_box { 5 } else { 0 };
+    // Pack the bottom block to exactly the lines we'll draw so the cover
+    // (square, capped at width/2 in height) gets every spare cell.
+    let meta_h = meta_height(app, has_chain_box);
+    let bottom_total = meta_h + chain_h;
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(8), Constraint::Length(meta_total)])
+        .constraints([Constraint::Min(8), Constraint::Length(bottom_total)])
         .split(inner);
 
     crate::images::render_cover_widget(f, app, rows[0]);
@@ -69,13 +73,32 @@ fn render_cover_panel(f: &mut Frame, app: &mut App, area: Rect) {
     if has_chain_box {
         let meta_rows = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(4), Constraint::Length(5)])
+            .constraints([Constraint::Length(meta_h), Constraint::Length(chain_h)])
             .split(rows[1]);
         render_meta_under_cover(f, app, meta_rows[0]);
         render_chain_box(f, app, meta_rows[1]);
     } else {
         render_meta_under_cover(f, app, rows[1]);
     }
+}
+
+fn meta_height(app: &App, has_chain_box: bool) -> u16 {
+    let Some(t) = &app.playback.current else { return 2; };
+    let mut n: u16 = 0;
+    if !t.artists_joined().is_empty() { n += 1; }
+    n += 1; // album + year line is always pushed
+    if t.genre.as_deref().filter(|s| !s.is_empty()).is_some() { n += 1; }
+    if !has_chain_box {
+        let fmt = fmt_from_uri(&t.uri);
+        let bitrate = t.bitrate.or(app.bitrate).filter(|b| *b > 0);
+        let audio = app.audio.as_ref().filter(|a| a.rate > 0);
+        if fmt.is_some() || bitrate.is_some() || audio.is_some() { n += 1; }
+    }
+    if goodies_play_count(app, &t.uri).is_some() {
+        n += 2; // blank line + "played N×"
+    }
+    // +1 to absorb the occasional wrap on a long artist/album.
+    n.saturating_add(1).max(3)
 }
 
 fn render_chain_box(f: &mut Frame, app: &App, area: Rect) {
