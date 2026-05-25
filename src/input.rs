@@ -601,6 +601,21 @@ fn handle_playlists(app: &mut App, key: KeyEvent) -> Cmd {
             };
             Cmd::None
         }
+        // Back to the playlist list from the track pane. Without these,
+        // users get stuck on the right pane and only Tab gets them out.
+        KeyCode::Left | KeyCode::Char('h') | KeyCode::Esc | KeyCode::Backspace
+            if app.playlists.focus == PlaylistsFocus::Tracks =>
+        {
+            app.playlists.focus = PlaylistsFocus::List;
+            Cmd::None
+        }
+        // Dive into the track pane from the list (mirrors h/← going back).
+        KeyCode::Right | KeyCode::Char('l')
+            if app.playlists.focus == PlaylistsFocus::List && len_tracks > 0 =>
+        {
+            app.playlists.focus = PlaylistsFocus::Tracks;
+            Cmd::None
+        }
         KeyCode::Down | KeyCode::Char('j') => {
             match app.playlists.focus {
                 PlaylistsFocus::List => {

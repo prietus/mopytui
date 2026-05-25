@@ -1,10 +1,19 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// `#[serde(default)]` only fills in **missing** fields. Mopidy (especially
+/// `mopidy_tidal`) sometimes emits explicit `null` for string fields like
+/// `track.name` when a track ref isn't fully resolved — that crashes any
+/// `String` field. Apply this on String fields that may come back as null
+/// to coerce `null` → `""` instead of erroring the whole call.
+fn de_string_default<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(Option::<String>::deserialize(d)?.unwrap_or_default())
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Artist {
     #[serde(default)]
     pub uri: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_default")]
     pub name: String,
 }
 
@@ -12,7 +21,7 @@ pub struct Artist {
 pub struct Album {
     #[serde(default)]
     pub uri: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_default")]
     pub name: String,
     #[serde(default)]
     pub artists: Vec<Artist>,
@@ -25,7 +34,7 @@ pub struct Album {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Track {
     pub uri: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_default")]
     pub name: String,
     #[serde(default)]
     pub artists: Vec<Artist>,
@@ -65,7 +74,7 @@ pub enum Ref {
         #[serde(rename = "type")]
         kind: String,
         uri: String,
-        #[serde(default)]
+        #[serde(default, deserialize_with = "de_string_default")]
         name: String,
     },
 }
@@ -115,7 +124,7 @@ pub struct TlTrack {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Playlist {
     pub uri: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_default")]
     pub name: String,
     #[serde(default)]
     pub tracks: Vec<Track>,
@@ -182,4 +191,49 @@ pub struct Modes {
     pub repeat: bool,
     pub single: bool,
     pub consume: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression: mopidy_tidal returns playlist tracks with `name: null`
+    /// (and a sentinel `tidal:track:0:0:0` uri) for unresolved refs. The old
+    /// `name: String` with `#[serde(default)]` failed because `default` only
+    /// kicks in for *missing* fields — `null` was an outright type error,
+    /// aborting `tracklist.add` with "json: invalid type: null, expected a
+    /// string".
+    #[test]
+    fn track_tolerates_null_name_from_tidal() {
+        let raw = r#"{
+            "__model__":"Track","uri":"tidal:track:0:0:0","name":null,
+            "artists":[],"album":null,"composers":[],"performers":[],
+            "genre":null,"track_no":null,"disc_no":null,"date":null,
+            "length":null,"bitrate":null,"comment":null,
+            "musicbrainz_id":null,"last_modified":null
+        }"#;
+        let t: Track = serde_json::from_str(raw).expect("null name should deserialize");
+        assert_eq!(t.name, "");
+        assert_eq!(t.uri, "tidal:track:0:0:0");
+    }
+
+    #[test]
+    fn tl_track_list_with_null_names_round_trips() {
+        let raw = r#"[
+            {"__model__":"TlTrack","tlid":1,"track":{"uri":"a","name":null}},
+            {"__model__":"TlTrack","tlid":2,"track":{"uri":"b","name":"ok"}}
+        ]"#;
+        let v: Vec<TlTrack> = serde_json::from_str(raw).expect("mixed null/string names");
+        assert_eq!(v.len(), 2);
+        assert_eq!(v[0].track.name, "");
+        assert_eq!(v[1].track.name, "ok");
+    }
+
+    #[test]
+    fn artist_and_album_tolerate_null_name() {
+        let a: Artist = serde_json::from_str(r#"{"uri":"x","name":null}"#).unwrap();
+        assert_eq!(a.name, "");
+        let al: Album = serde_json::from_str(r#"{"uri":"x","name":null}"#).unwrap();
+        assert_eq!(al.name, "");
+    }
 }

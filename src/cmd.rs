@@ -306,10 +306,23 @@ pub async fn add_uris(app: &mut App, uris: Vec<String>) {
     let auto_play = was_empty && app.playback.state != PlayState::Playing;
     match app.client.tracklist_add(uris.clone(), None).await {
         Ok(added) => {
-            app.status.flash(format!("added {} track(s)", added.len()), crate::app::StatusKind::Ok);
+            let (good, dropped) = drop_unresolved(app, added).await;
+            let msg = if dropped == 0 {
+                format!("added {} track(s)", good.len())
+            } else if good.is_empty() {
+                format!("nothing playable ({dropped} skipped)")
+            } else {
+                format!("added {} ({dropped} skipped — unavailable)", good.len())
+            };
+            let kind = if good.is_empty() && dropped > 0 {
+                crate::app::StatusKind::Err
+            } else {
+                crate::app::StatusKind::Ok
+            };
+            app.status.flash(msg, kind);
             refresh_queue(app).await;
             if auto_play
-                && let Some(first) = added.first()
+                && let Some(first) = good.first()
             {
                 let _ = app.client.playback_play(Some(first.tlid)).await;
                 refresh_playback(app).await;
@@ -317,6 +330,28 @@ pub async fn add_uris(app: &mut App, uris: Vec<String>) {
         }
         Err(e) => app.status.flash(format!("add: {}", e.0), crate::app::StatusKind::Err),
     }
+}
+
+/// `mopidy_tidal` expands some playlists/categories into placeholder refs
+/// (`uri == "tidal:track:0:0:0"`, all-null metadata) that mopidy can't
+/// actually play — it just 404-loops on each one. Strip them from the
+/// tracklist before they pollute the queue.
+async fn drop_unresolved(
+    app: &mut App,
+    added: Vec<crate::mopidy::models::TlTrack>,
+) -> (Vec<crate::mopidy::models::TlTrack>, usize) {
+    let (good, bad): (Vec<_>, Vec<_>) = added
+        .into_iter()
+        .partition(|tl| !is_unresolved_placeholder(&tl.track));
+    if !bad.is_empty() {
+        let tlids: Vec<u32> = bad.iter().map(|tl| tl.tlid).collect();
+        let _ = app.client.tracklist_remove(tlids).await;
+    }
+    (good, bad.len())
+}
+
+fn is_unresolved_placeholder(t: &Track) -> bool {
+    t.uri == "tidal:track:0:0:0"
 }
 
 // ─── search ─────────────────────────────────────────────────────────────────
@@ -760,12 +795,25 @@ pub async fn play_album(app: &mut App, uri: String) {
     }
     match app.client.tracklist_add(vec![uri.clone()], None).await {
         Ok(added) => {
-            if let Some(first) = added.first() {
+            let (good, dropped) = drop_unresolved(app, added).await;
+            if let Some(first) = good.first() {
                 let _ = app.client.playback_play(Some(first.tlid)).await;
             }
             refresh_queue(app).await;
             refresh_playback(app).await;
-            app.status.flash("playing album", crate::app::StatusKind::Ok);
+            let msg = if dropped == 0 {
+                "playing album".to_string()
+            } else if good.is_empty() {
+                format!("album empty ({dropped} unavailable)")
+            } else {
+                format!("playing album ({dropped} skipped)")
+            };
+            let kind = if good.is_empty() && dropped > 0 {
+                crate::app::StatusKind::Err
+            } else {
+                crate::app::StatusKind::Ok
+            };
+            app.status.flash(msg, kind);
         }
         Err(e) => app.status.flash(format!("add: {}", e.0), crate::app::StatusKind::Err),
     }
@@ -774,7 +822,20 @@ pub async fn play_album(app: &mut App, uri: String) {
 pub async fn queue_album(app: &mut App, uri: String) {
     match app.client.tracklist_add(vec![uri], None).await {
         Ok(added) => {
-            app.status.flash(format!("queued {} tracks", added.len()), crate::app::StatusKind::Ok);
+            let (good, dropped) = drop_unresolved(app, added).await;
+            let msg = if dropped == 0 {
+                format!("queued {} tracks", good.len())
+            } else if good.is_empty() {
+                format!("nothing playable ({dropped} skipped)")
+            } else {
+                format!("queued {} ({dropped} skipped)", good.len())
+            };
+            let kind = if good.is_empty() && dropped > 0 {
+                crate::app::StatusKind::Err
+            } else {
+                crate::app::StatusKind::Ok
+            };
+            app.status.flash(msg, kind);
             refresh_queue(app).await;
         }
         Err(e) => app.status.flash(format!("add: {}", e.0), crate::app::StatusKind::Err),
