@@ -7,7 +7,7 @@
 //! point is "alive while playing", not signal accuracy.
 
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Padding, Paragraph};
@@ -46,7 +46,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
-        ]));
+        ]).alignment(Alignment::Center));
     let inner = block.inner(area);
     f.render_widget(block, area);
 

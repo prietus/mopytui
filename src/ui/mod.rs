@@ -29,7 +29,7 @@ pub fn render(f: &mut Frame, app: &mut App) {
     let area = f.area();
     let h = area.height;
 
-    let header_h: u16 = if h < 22 { 3 } else { 5 };
+    let header_h: u16 = if h < 22 { 3 } else { 4 };
 
     let v = Layout::default()
         .direction(Direction::Vertical)

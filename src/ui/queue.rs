@@ -3,8 +3,31 @@ use ratatui::layout::{Constraint, Direction, Layout, Margin, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Cell, Padding, Paragraph, Row, Table, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 use crate::app::App;
+
+/// Truncate `s` so it fits in `max_cells` terminal columns, ending with `…`
+/// when content is dropped. ratatui's default cell hard-cuts at the byte
+/// boundary (no marker), which produces ugly "Move on Up (Single E" tails —
+/// this gives us a clean `… ` instead.
+fn ellipsize(s: &str, max_cells: u16) -> String {
+    let max = max_cells as usize;
+    if max == 0 { return String::new(); }
+    if s.width() <= max { return s.to_string(); }
+    if max == 1 { return "…".to_string(); }
+    let budget = max - 1;
+    let mut out = String::with_capacity(s.len() + 3);
+    let mut w = 0usize;
+    for ch in s.chars() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if w + cw > budget { break; }
+        out.push(ch);
+        w += cw;
+    }
+    out.push('…');
+    out
+}
 
 pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
     // Show the cover panel on the left when there's a current track and the
@@ -159,19 +182,21 @@ fn render_chain_box(f: &mut Frame, app: &App, area: Rect) {
         lines.push(Line::from(chain));
     }
 
-    // Line 3 — verdict pill. Green dot + label when bit-perfect, warn
-    // otherwise so a degraded chain reads as a soft warning.
+    // Line 3 — verdict pill. ✓ + label when bit-perfect, ⚠ otherwise so a
+    // degraded chain reads as a soft warning. The glyph carries semantic
+    // weight on its own (more readable than the generic ●).
     if let Some(v) = &app.audio_verdict {
-        let (dot_color, text_color) = if v == "bit-perfect" {
-            (app.theme.ok, app.theme.ok)
+        let bit_perfect = v == "bit-perfect";
+        let (glyph, color) = if bit_perfect {
+            ("✓ ", app.theme.ok)
         } else {
-            (app.theme.warn, app.theme.warn)
+            ("⚠ ", app.theme.warn)
         };
         lines.push(Line::from(vec![
-            Span::styled("● ", Style::default().fg(dot_color)),
+            Span::styled(glyph, Style::default().fg(color).add_modifier(Modifier::BOLD)),
             Span::styled(
                 v.clone(),
-                Style::default().fg(text_color).add_modifier(Modifier::BOLD),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
         ]));
     }
@@ -280,27 +305,31 @@ fn render_meta_under_cover(f: &mut Frame, app: &App, area: Rect) {
 /// Best-effort codec label from the track URI. Mopidy doesn't expose the
 /// actual GStreamer caps via MPD or JSON-RPC, so we infer from the file
 /// extension for local tracks and from the URI scheme for streams.
+///
+/// The leading glyph is universal Unicode (no Nerd Font required): `∿`
+/// (U+223F sine wave) for Tidal — visual nod to Tidal's wave logo — `⇄`
+/// for network streams, and a musical-note family for local file codecs.
 fn fmt_from_uri(uri: &str) -> Option<&'static str> {
     if uri.starts_with("tidal:") {
-        return Some("Tidal");
+        return Some("∿ Tidal");
     }
     if uri.starts_with("http://") || uri.starts_with("https://") {
-        return Some("Stream");
+        return Some("⇄ Stream");
     }
     let ext = uri.rsplit('.').next()?.to_ascii_lowercase();
     match ext.as_str() {
-        "flac" => Some("FLAC"),
-        "mp3"  => Some("MP3"),
-        "m4a" | "mp4" => Some("M4A"),
-        "alac" => Some("ALAC"),
-        "aac"  => Some("AAC"),
-        "ogg" | "oga" => Some("OGG"),
-        "opus" => Some("OPUS"),
-        "wav"  => Some("WAV"),
-        "aif" | "aiff" => Some("AIFF"),
-        "dsf" | "dff" => Some("DSD"),
-        "wv"   => Some("WV"),
-        "ape"  => Some("APE"),
+        "flac" => Some("♬ FLAC"),
+        "mp3"  => Some("♪ MP3"),
+        "m4a" | "mp4" => Some("♪ M4A"),
+        "alac" => Some("♬ ALAC"),
+        "aac"  => Some("♪ AAC"),
+        "ogg" | "oga" => Some("♪ OGG"),
+        "opus" => Some("♪ OPUS"),
+        "wav"  => Some("♬ WAV"),
+        "aif" | "aiff" => Some("♬ AIFF"),
+        "dsf" | "dff" => Some("♬ DSD"),
+        "wv"   => Some("♬ WV"),
+        "ape"  => Some("♬ APE"),
         _ => None,
     }
 }
@@ -314,7 +343,19 @@ fn goodies_play_count(app: &App, uri: &str) -> Option<u32> {
 }
 
 fn render_queue_table(f: &mut Frame, app: &mut App, area: Rect) {
-    let title = format!(" Queue — {} ", app.queue.len());
+    let title = format!(" Queue · {} ", app.queue.len());
+
+    // Pre-compute per-column cell budgets so we can ellipsize text instead
+    // of letting ratatui hard-cut at the cell boundary. The split mirrors
+    // the constraint list below; 1 cell of safety on each dynamic column
+    // covers ratatui's internal padding.
+    const HASH_W: u16 = 7;
+    const LEN_W: u16 = 6;
+    let inner_w = area.width.saturating_sub(2); // rounded borders
+    let dyn_w = inner_w.saturating_sub(HASH_W + LEN_W + 2); // 2 = column separators
+    let artist_w = (dyn_w * 22 / 100).saturating_sub(1);
+    let title_w = (dyn_w * 33 / 100).saturating_sub(1);
+    let album_w = dyn_w.saturating_sub(artist_w + title_w + 2);
 
     let header = Row::new(vec![
         Cell::from("  #").style(Style::default().fg(app.theme.fg_muted)),
@@ -341,9 +382,9 @@ fn render_queue_table(f: &mut Frame, app: &mut App, area: Rect) {
             };
             Row::new(vec![
                 Cell::from(format!("{marker}{:>3}", i + 1)),
-                Cell::from(tl.track.artists_joined()),
-                Cell::from(tl.track.name.clone()),
-                Cell::from(tl.track.album_name().to_string()),
+                Cell::from(ellipsize(&tl.track.artists_joined(), artist_w)),
+                Cell::from(ellipsize(&tl.track.name, title_w)),
+                Cell::from(ellipsize(tl.track.album_name(), album_w)),
                 Cell::from(tl.track.length.map(|ms| fmt_ms(ms as i64)).unwrap_or_default()),
             ])
             .style(style)
@@ -351,11 +392,11 @@ fn render_queue_table(f: &mut Frame, app: &mut App, area: Rect) {
         .collect();
 
     let widths = [
-        Constraint::Length(7),
-        Constraint::Percentage(25),
+        Constraint::Length(HASH_W),
+        Constraint::Percentage(22),
         Constraint::Percentage(33),
-        Constraint::Percentage(33),
-        Constraint::Length(6),
+        Constraint::Min(0),
+        Constraint::Length(LEN_W),
     ];
 
     let table = Table::new(rows, widths)

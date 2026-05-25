@@ -43,48 +43,52 @@ fn render_state_box(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let (label, color) = match app.playback.state {
-        PlayState::Playing => ("[Playing]", app.theme.ok),
-        PlayState::Paused => ("[Paused]", app.theme.warn),
-        PlayState::Stopped => ("[Stopped]", app.theme.fg_muted),
+    let (glyph, color) = match app.playback.state {
+        PlayState::Playing => ("▶", app.theme.ok),
+        PlayState::Paused => ("⏸", app.theme.warn),
+        PlayState::Stopped => ("■", app.theme.fg_muted),
     };
     let total = app.playback.current.as_ref().and_then(|t| t.length).unwrap_or(0) as i64;
     let elapsed = app.playback.elapsed_ms.max(0);
-    let timer = format!("{}  /  {}", fmt_ms(elapsed), fmt_ms(total));
     let bitrate = app
         .playback
         .current
         .as_ref()
         .and_then(|t| t.bitrate)
         .or(app.bitrate)
-        .filter(|b| *b > 0)
-        .map(|b| format!("  ·  {b} kbps"))
+        .filter(|b| *b > 0);
+    let bits_rate = app
+        .audio
+        .as_ref()
+        .map(|a| format!("{}-bit · {} kHz", a.bits, a.rate / 1000))
         .unwrap_or_default();
-    let mut chip_extra = String::new();
-    if let Some(a) = &app.audio {
-        chip_extra = format!("{}-bit · {} kHz", a.bits, a.rate / 1000);
+
+    // Line 1 — state glyph + timer.
+    let mut row1: Vec<Span> = vec![
+        Span::styled(
+            format!("{glyph} "),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{}  /  {}", fmt_ms(elapsed), fmt_ms(total)),
+            Style::default().fg(app.theme.fg_strong).add_modifier(Modifier::BOLD),
+        ),
+    ];
+    if let Some(b) = bitrate {
+        row1.push(Span::styled(
+            format!("  ·  {b} kbps"),
+            Style::default().fg(app.theme.fg_muted),
+        ));
     }
 
-    let lines = vec![
-        Line::from(Span::styled(
-            label,
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )),
-        Line::from(vec![
-            Span::styled(
-                timer,
-                Style::default()
-                    .fg(app.theme.fg_strong)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(bitrate, Style::default().fg(app.theme.fg_muted)),
-        ]),
-        Line::from(Span::styled(
-            chip_extra,
-            Style::default().fg(app.theme.accent_alt),
-        )),
-    ];
-    f.render_widget(Paragraph::new(lines), inner);
+    // Line 2 — bit-depth · rate. The accent_alt is the same colour the
+    // chain box uses for codec; keeps the visual identity coherent.
+    let row2 = Line::from(Span::styled(
+        bits_rate,
+        Style::default().fg(app.theme.accent_alt),
+    ));
+
+    f.render_widget(Paragraph::new(vec![Line::from(row1), row2]), inner);
 }
 
 fn render_title_box(f: &mut Frame, app: &App, area: Rect) {
@@ -137,22 +141,21 @@ fn render_title_box(f: &mut Frame, app: &App, area: Rect) {
         sub_spans.push(Span::styled(album, Style::default().fg(app.theme.fg_muted)));
     }
 
+    // Two-line content, no top padding — the rounded border already gives
+    // visual breathing room. Title left-justified (the natural eye-anchor
+    // for "what's playing"), sub-line follows directly below.
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(1),
-            Constraint::Length(1),
-        ])
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
         .split(inner);
 
     f.render_widget(
         Paragraph::new(Line::from(title_spans)).wrap(Wrap { trim: true }),
-        rows[1],
+        rows[0],
     );
     f.render_widget(
         Paragraph::new(Line::from(sub_spans)).wrap(Wrap { trim: true }),
-        rows[2],
+        rows[1],
     );
 }
 
@@ -167,7 +170,7 @@ fn render_vol_box(f: &mut Frame, app: &App, area: Rect) {
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Length(1), Constraint::Min(0)])
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
         .split(inner);
 
     // Volume bar
