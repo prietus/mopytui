@@ -304,6 +304,7 @@ pub async fn toggle_play_pause(app: &mut App) {
 pub async fn add_uris(app: &mut App, uris: Vec<String>) {
     let was_empty = app.queue.is_empty();
     let auto_play = was_empty && app.playback.state != PlayState::Playing;
+    let uris = expand_tidal_playlists(app, uris).await;
     match app.client.tracklist_add(uris.clone(), None).await {
         Ok(added) => {
             let (good, dropped) = drop_unresolved(app, added).await;
@@ -352,6 +353,37 @@ async fn drop_unresolved(
 
 fn is_unresolved_placeholder(t: &Track) -> bool {
     t.uri == "tidal:track:0:0:0"
+}
+
+/// `mopidy_tidal`'s `library.lookup(playlist_uri)` returns null placeholders
+/// for editorial playlists (e.g. "Headphone Classics"), but `library.browse`
+/// of the same URI returns the real track refs. Since `tracklist.add` goes
+/// through lookup internally, expand any `tidal:playlist:*` URI via browse
+/// before handing it off — the track URIs lookup fine individually.
+async fn expand_tidal_playlists(app: &App, uris: Vec<String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(uris.len());
+    for uri in uris {
+        if uri.starts_with("tidal:playlist:") {
+            match app.client.browse(Some(uri.clone())).await {
+                Ok(refs) => {
+                    let tracks: Vec<String> = refs
+                        .into_iter()
+                        .filter(|r| r.kind == "track")
+                        .map(|r| r.uri)
+                        .collect();
+                    if tracks.is_empty() {
+                        out.push(uri);
+                    } else {
+                        out.extend(tracks);
+                    }
+                }
+                Err(_) => out.push(uri),
+            }
+        } else {
+            out.push(uri);
+        }
+    }
+    out
 }
 
 // ─── search ─────────────────────────────────────────────────────────────────
@@ -793,7 +825,8 @@ pub async fn play_album(app: &mut App, uri: String) {
         app.status.flash(format!("clear: {}", e.0), crate::app::StatusKind::Err);
         return;
     }
-    match app.client.tracklist_add(vec![uri.clone()], None).await {
+    let uris = expand_tidal_playlists(app, vec![uri.clone()]).await;
+    match app.client.tracklist_add(uris, None).await {
         Ok(added) => {
             let (good, dropped) = drop_unresolved(app, added).await;
             if let Some(first) = good.first() {
@@ -820,7 +853,8 @@ pub async fn play_album(app: &mut App, uri: String) {
 }
 
 pub async fn queue_album(app: &mut App, uri: String) {
-    match app.client.tracklist_add(vec![uri], None).await {
+    let uris = expand_tidal_playlists(app, vec![uri]).await;
+    match app.client.tracklist_add(uris, None).await {
         Ok(added) => {
             let (good, dropped) = drop_unresolved(app, added).await;
             let msg = if dropped == 0 {
