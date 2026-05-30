@@ -73,6 +73,16 @@ pub fn make_picker(override_protocol: Option<&str>) -> Picker {
             None
         }
     });
+    // Konsole doesn't set TERM_PROGRAM but does export KONSOLE_VERSION.
+    // Sixel is on by default in recent Konsole (24.x+) and easily enabled
+    // in older releases — claim Sixel here so users don't need the flag.
+    let env_force = env_force.or_else(|| {
+        if std::env::var("KONSOLE_VERSION").is_ok() {
+            Some(ProtocolType::Sixel)
+        } else {
+            None
+        }
+    });
 
     // Build picker. We still want the picker's font_size from the terminal
     // query when possible (so image scaling is correct), but we'll override
