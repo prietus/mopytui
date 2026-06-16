@@ -33,15 +33,8 @@ halfblocks** — detected at runtime.
 ## Screenshots
 
 <p align="center">
-  <img src="https://paste.priet.us/file/a7760a4ac1" width="48%" alt="mopytui screenshot 1" />
-  <img src="https://paste.priet.us/file/935dba0e99" width="48%" alt="mopytui screenshot 2" />
-</p>
-<p align="center">
-  <img src="https://paste.priet.us/file/7196d17116" width="48%" alt="mopytui screenshot 3" />
-  <img src="https://paste.priet.us/file/849527fdd4" width="48%" alt="mopytui screenshot 4" />
-</p>
-<p align="center">
-  <img src="https://paste.priet.us/file/808c7d78f1" width="48%" alt="mopytui screenshot 5" />
+  <img src="assets/queue.png" width="48%" alt="Queue view with cover art" />
+  <img src="assets/library.png" width="48%" alt="Library browsing Tidal" />
 </p>
 
 ## Features
