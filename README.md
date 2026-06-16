@@ -33,7 +33,15 @@ halfblocks** — detected at runtime.
 ## Screenshots
 
 <p align="center">
-  <img src="assets/queue.png" width="48%" alt="Queue view with cover art" />
+  <img src="assets/queue.png" width="48%" alt="Queue view with cover and spectrum visualizer" />
+  <img src="assets/lyrics.png" width="48%" alt="Now Playing with synced lyrics" />
+</p>
+<p align="center">
+  <img src="assets/album.png" width="48%" alt="Album detail with credits and tracks" />
+  <img src="assets/info.png" width="48%" alt="Info view with album and artist data" />
+</p>
+<p align="center">
+  <img src="assets/search.png" width="48%" alt="Cross-source search" />
 </p>
 
 ## Features
