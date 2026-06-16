@@ -34,7 +34,6 @@ halfblocks** — detected at runtime.
 
 <p align="center">
   <img src="assets/queue.png" width="48%" alt="Queue view with cover art" />
-  <img src="assets/library.png" width="48%" alt="Library browsing Tidal" />
 </p>
 
 ## Features
