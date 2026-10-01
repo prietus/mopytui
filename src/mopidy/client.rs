@@ -31,6 +31,27 @@ pub struct TidalText {
     pub image: Option<String>,
 }
 
+/// Extract `<url>` from mopidy-tidal's "Please visit <url> to log in." item.
+pub fn tidal_login_url_in(name: &str) -> Option<String> {
+    let rest = &name[name.find("Please visit ")? + "Please visit ".len()..];
+    let url = &rest[..rest.find(" to log in")?];
+    (!url.is_empty() && !url.contains(char::is_whitespace)).then(|| url.to_string())
+}
+
+/// Drop mopidy-tidal's fake login hits (URI ends in `:login`) from search.
+fn without_login_hits(mut results: Vec<SearchResult>) -> Vec<SearchResult> {
+    let fake = |uri: &Option<String>, name: &str| {
+        uri.as_deref().is_some_and(|u| u.starts_with("tidal:") && u.ends_with(":login"))
+            || tidal_login_url_in(name).is_some()
+    };
+    for r in &mut results {
+        r.tracks.retain(|t| !fake(&Some(t.uri.clone()), &t.name));
+        r.albums.retain(|a| !fake(&a.uri, &a.name));
+        r.artists.retain(|a| !fake(&a.uri, &a.name));
+    }
+    results
+}
+
 /// A Tidal radio: `(uri, title)` of each track and the seed's title.
 #[derive(Debug, Clone, Default)]
 pub struct Radio {
@@ -190,7 +211,7 @@ impl Client {
                 json!({ "query": { "any": [query] }, "uris": uris }),
             )
             .await?;
-        Ok(serde_json::from_value(v)?)
+        Ok(without_login_hits(serde_json::from_value(v)?))
     }
 
     pub async fn search_query(
@@ -205,13 +226,31 @@ impl Client {
                 json!({ "query": query, "uris": uris, "exact": exact }),
             )
             .await?;
-        Ok(serde_json::from_value(v)?)
+        Ok(without_login_hits(serde_json::from_value(v)?))
     }
 
-    pub async fn browse(&self, uri: Option<String>) -> Result<Vec<LibRef>> {
+    async fn browse_raw(&self, uri: Option<String>) -> Result<Vec<LibRef>> {
         let v = self.call("core.library.browse", json!({ "uri": uri })).await?;
         let raw: Vec<Ref> = serde_json::from_value(v)?;
         Ok(raw.into_iter().map(Ref::into_lib).collect())
+    }
+
+    /// Browse without mopidy-tidal's fake "Please visit … to log in" entries.
+    pub async fn browse(&self, uri: Option<String>) -> Result<Vec<LibRef>> {
+        let mut refs = self.browse_raw(uri).await?;
+        refs.retain(|r| tidal_login_url_in(&r.name).is_none());
+        Ok(refs)
+    }
+
+    /// URL to authorize the Mopidy server with Tidal, or `None` when it is
+    /// already logged in (or mopidy-tidal isn't installed). Without a session
+    /// mopidy-tidal answers every Tidal call with one fake item named
+    /// "Please visit <url> to log in." — in PKCE mode that URL points to
+    /// "localhost", which is rewritten to the Mopidy host.
+    pub async fn tidal_login_url(&self, host: &str) -> Option<String> {
+        let refs = self.browse_raw(Some("tidal:directory".into())).await.ok()?;
+        let url = refs.iter().find_map(|r| tidal_login_url_in(&r.name))?;
+        Some(url.replace("://localhost", &format!("://{host}")).replace("://127.0.0.1", &format!("://{host}")))
     }
 
     pub async fn lookup(&self, uris: Vec<String>) -> Result<HashMap<String, Vec<Track>>> {
@@ -721,5 +760,24 @@ mod credits_tests {
         assert_eq!(track_credits(&payload(), "local:track:abc", "")[0].role, "Mixer");
         assert_eq!(track_credits(&payload(), "tidal:track:9", " that old feeling ")[0].role, "Producer");
         assert!(track_credits(&payload(), "tidal:track:9", "nope").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod login_tests {
+    use super::tidal_login_url_in;
+
+    #[test]
+    fn extracts_login_url() {
+        assert_eq!(
+            tidal_login_url_in("Please visit https://link.tidal.com/ABCDE to log in.").as_deref(),
+            Some("https://link.tidal.com/ABCDE")
+        );
+        assert_eq!(
+            tidal_login_url_in("Please visit http://localhost:8989/login to log in").as_deref(),
+            Some("http://localhost:8989/login")
+        );
+        assert!(tidal_login_url_in("My Albums").is_none());
+        assert!(tidal_login_url_in("Please visit  to log in").is_none());
     }
 }

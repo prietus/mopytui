@@ -41,6 +41,9 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         }
         _ => {}
     }
+    if app.tidal_login.is_some() {
+        hints.push(("!", "Tidal login"));
+    }
     hints.push(("?", "help"));
     let mut spans: Vec<Span> = Vec::new();
     spans.push(Span::raw(" "));

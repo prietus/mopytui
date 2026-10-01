@@ -8,6 +8,20 @@ use crate::app::{App, Cmd, LibraryFocus, PlaylistsFocus, SearchFocus, View};
 use crate::mopidy::models::PlayState;
 
 pub fn handle_key(app: &mut App, key: KeyEvent) -> Cmd {
+    // While the Tidal login popup is up it swallows keys: Enter opens the
+    // link, Esc hides it, `q` still quits.
+    if app.tidal_login.is_some() && !app.tidal_login_hidden {
+        return match key.code {
+            KeyCode::Enter => Cmd::OpenTidalLogin,
+            KeyCode::Esc => {
+                app.tidal_login_hidden = true;
+                Cmd::None
+            }
+            KeyCode::Char('q') | KeyCode::Char('Q') => Cmd::Quit,
+            _ => Cmd::None,
+        };
+    }
+
     // The Search form owns the keyboard when focus is on a text field —
     // otherwise plain letters would trigger global shortcuts (`q` quit, etc).
     if app.view == View::Search && matches!(app.search.focus, SearchFocus::Field(_)) {
@@ -145,6 +159,10 @@ fn global_key(app: &mut App, key: KeyEvent) -> Option<Cmd> {
         KeyCode::Char('q') | KeyCode::Char('Q') => Some(Cmd::Quit),
         KeyCode::Esc if app.view == View::Help => {
             app.set_view(app.prev_view);
+            Some(Cmd::None)
+        }
+        KeyCode::Char('!') if app.tidal_login.is_some() => {
+            app.tidal_login_hidden = false;
             Some(Cmd::None)
         }
         KeyCode::Char('?') => {

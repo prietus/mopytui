@@ -110,6 +110,7 @@ pub async fn apply(app: &mut App, cmd: Cmd) -> Result<()> {
         Cmd::FetchCover(uri) => fetch_cover_async(app, uri),
         Cmd::ToggleFavoriteAlbum(uri) => toggle_favorite_album(app, uri).await,
         Cmd::StartRadio(uri) => start_radio(app, uri).await,
+        Cmd::OpenTidalLogin => open_tidal_login(app),
         Cmd::LoadAlbums => load_albums(app).await,
         Cmd::OpenAlbumDetail(uri) => open_album_detail(app, uri).await,
         Cmd::BackToAlbumsGrid => {
@@ -132,6 +133,10 @@ fn log_err(app: &mut App, what: &str, r: crate::mopidy::client::Result<()>) {
 // ─── refresh helpers ────────────────────────────────────────────────────────
 
 pub async fn refresh_all(app: &mut App) {
+    // Ask about the Tidal login before anything that could touch Tidal: on a
+    // server without a session, goodies (< 0.8.2) and mopidy-tidal can wedge
+    // the whole of Mopidy for minutes if poked.
+    probe_tidal_login_now(app).await;
     refresh_playback(app).await;
     refresh_queue(app).await;
     refresh_modes(app).await;
@@ -139,6 +144,103 @@ pub async fn refresh_all(app: &mut App) {
         browse_into(app, None, "Library".into()).await;
     }
     check_goodies(app).await;
+}
+
+/// Bounded, inline login probe used at (re)connect so the answer is known
+/// before other Tidal-touching calls. A timeout leaves the state unknown; the
+/// background probe on the next tick tries again.
+async fn probe_tidal_login_now(app: &mut App) {
+    let probe = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        app.client.tidal_login_url(&app.cfg.host),
+    )
+    .await;
+    if let Ok(url) = probe {
+        app.tidal_login_checked = std::time::Instant::now();
+        app.tidal_login_probed_once = true;
+        if url.is_some() && app.tidal_login.is_none() {
+            app.tidal_login_hidden = false;
+        }
+        app.tidal_login = url;
+    }
+}
+
+/// Start a background probe asking Mopidy whether Tidal needs authorizing.
+/// It never blocks the UI (without a session Mopidy can be slow to answer);
+/// `apply_tidal_probe` adopts the result on a later tick. While login is
+/// pending, `main` re-probes every few seconds — mopidy-tidal completes the
+/// login server-side once the link is approved.
+pub fn spawn_tidal_probe(app: &mut App) {
+    {
+        let mut p = app.tidal_probe.lock().unwrap();
+        if p.inflight {
+            return;
+        }
+        p.inflight = true;
+    }
+    app.tidal_login_checked = std::time::Instant::now();
+    app.tidal_login_probed_once = true;
+    let client = app.client.clone();
+    let host = app.cfg.host.clone();
+    let probe = app.tidal_probe.clone();
+    tokio::spawn(async move {
+        let url = tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            client.tidal_login_url(&host),
+        )
+        .await;
+        let mut p = probe.lock().unwrap();
+        p.inflight = false;
+        // A timeout says nothing about the login state: keep what we know.
+        if let Ok(url) = url {
+            p.result = Some(url);
+        }
+    });
+}
+
+/// Adopt a finished probe. When login flips to done, reload Tidal views.
+pub async fn apply_tidal_probe(app: &mut App) {
+    let Some(url) = app.tidal_probe.lock().unwrap().result.take() else { return };
+    let was = app.tidal_login.is_some();
+    if url.is_some() && !was {
+        app.tidal_login_hidden = false;
+    }
+    let now = url.is_some();
+    app.tidal_login = url;
+    if was && !now {
+        app.status.flash("Tidal connected", crate::app::StatusKind::Ok);
+        app.albums.loaded = false;
+        if app.view == crate::app::View::Albums {
+            load_albums(app).await;
+        }
+        let tidal_crumb = app
+            .library
+            .crumbs
+            .last()
+            .and_then(|(u, _)| u.clone())
+            .filter(|u| u.starts_with("tidal:"));
+        if let Some(uri) = tidal_crumb {
+            let (_, name) = app.library.crumbs.pop().unwrap_or((None, String::new()));
+            browse_into(app, Some(uri), name).await;
+        }
+        load_favorites(app).await;
+    }
+}
+
+/// Open the Tidal login link with the platform's opener (no-op over SSH
+/// without a display; the URL is shown in the popup anyway).
+fn open_tidal_login(app: &mut App) {
+    let Some(url) = app.tidal_login.clone() else { return };
+    let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+    let r = std::process::Command::new(opener)
+        .arg(&url)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if r.is_err() {
+        app.status.flash("couldn't open a browser — open the link manually", crate::app::StatusKind::Warn);
+    }
 }
 
 pub async fn refresh_playback(app: &mut App) {
@@ -583,6 +685,8 @@ pub fn schedule_metadata_for_track(app: &mut App, track: &Track) {
     let state = app.metadata.clone();
     let client = app.client.clone();
     let seed_track = track.clone();
+    // goodies has no Tidal session to answer with while a login is pending.
+    let tidal_ready = app.tidal_login.is_none();
     let slot = app.meta_slot.clone();
     let images = app.images.clone();
     let fanart_api_key = app.cfg.fanart_api_key.clone().unwrap_or_default();
@@ -596,7 +700,13 @@ pub fn schedule_metadata_for_track(app: &mut App, track: &Track) {
                 }
             },
             state.artist(&artist),
-            fetch_tidal_texts(&client, &seed_track),
+            async {
+                if tidal_ready {
+                    fetch_tidal_texts(&client, &seed_track).await
+                } else {
+                    TidalLookup::default()
+                }
+            },
         );
         let mut album_res = album_res;
         let mut artist_res = artist_res;
@@ -1006,7 +1116,10 @@ pub async fn check_goodies(app: &mut App) {
         Ok(Some(_)) => {
             app.goodies.available = true;
             // Pull favorites once so the ★ markers light up in library views.
-            load_favorites(app).await;
+            // Skipped while Tidal needs a login: goodies has no session to use.
+            if app.tidal_login.is_none() {
+                load_favorites(app).await;
+            }
             // Initial audio snapshot — pulls DAC + live format + verdict.
             // Requires tidal_goodies >= 0.4.0; older plugins return 404 → no-op.
             refresh_audio_active(app).await;
@@ -1112,6 +1225,10 @@ fn clean_title(t: &str) -> String {
 pub async fn start_radio(app: &mut App, uri: String) {
     if !app.goodies.available {
         app.status.flash("radio needs the goodies plugin", crate::app::StatusKind::Warn);
+        return;
+    }
+    if app.tidal_login.is_some() {
+        app.status.flash("Tidal needs a login first — press ! for the link", crate::app::StatusKind::Warn);
         return;
     }
     app.status.flash("building radio…", crate::app::StatusKind::Info);

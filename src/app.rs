@@ -527,6 +527,15 @@ pub struct App {
     /// Background task filling the queue with the rest of a radio; aborted
     /// when a new radio starts so its tracks don't land in the new queue.
     pub radio_fill: Option<tokio::task::JoinHandle<()>>,
+    /// Tidal authorization link while the Mopidy server has no Tidal session.
+    pub tidal_login: Option<String>,
+    /// The login popup was dismissed with Esc (polling continues).
+    pub tidal_login_hidden: bool,
+    pub tidal_login_checked: Instant,
+    /// The login probe has run at least once since startup.
+    pub tidal_login_probed_once: bool,
+    /// Result of the background login probe, adopted on the next tick.
+    pub tidal_probe: Arc<std::sync::Mutex<TidalProbe>>,
     pub meta_key: Option<String>,
     pub current_album_meta: Option<AlbumMeta>,
     pub current_artist_meta: Option<ArtistMeta>,
@@ -590,6 +599,11 @@ impl App {
             metadata: Arc::new(MetadataState::new()),
             meta_slot: Arc::new(std::sync::Mutex::new(MetaSlot::default())),
             radio_fill: None,
+            tidal_login: None,
+            tidal_login_hidden: false,
+            tidal_login_checked: Instant::now(),
+            tidal_login_probed_once: false,
+            tidal_probe: Arc::new(std::sync::Mutex::new(TidalProbe::default())),
             meta_key: None,
             current_album_meta: None,
             current_artist_meta: None,
@@ -673,6 +687,13 @@ impl App {
 }
 
 #[derive(Default)]
+pub struct TidalProbe {
+    pub inflight: bool,
+    /// `Some(url)` = login needed, `Some(None)` = logged in / no Tidal.
+    pub result: Option<Option<String>>,
+}
+
+#[derive(Default)]
 pub struct MetaSlot {
     pub key: Option<String>,
     pub album: Option<AlbumMeta>,
@@ -724,6 +745,8 @@ pub enum Cmd {
     ToggleFavoriteAlbum(String),
     /// Queue a Tidal radio seeded from a track or artist URI (goodies).
     StartRadio(String),
+    /// Open the Tidal login link in the local browser.
+    OpenTidalLogin,
     LoadAlbums,
     OpenAlbumDetail(String),
     BackToAlbumsGrid,

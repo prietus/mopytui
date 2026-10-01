@@ -1,5 +1,6 @@
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use crossterm::execute;
@@ -182,6 +183,15 @@ async fn handle(app: &mut App, ev: AppEvent, mpris: &mpris::MprisHandle) -> Resu
     match ev {
         AppEvent::Tick => {
             app.tick_local_elapsed();
+            if app.connected {
+                cmd::apply_tidal_probe(app).await;
+                let due = !app.tidal_login_probed_once
+                    || (app.tidal_login.is_some()
+                        && app.tidal_login_checked.elapsed() >= Duration::from_secs(3));
+                if due {
+                    cmd::spawn_tidal_probe(app);
+                }
+            }
         }
         AppEvent::Key(k) => {
             let cmd = input::handle_key(app, k);

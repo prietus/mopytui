@@ -47,6 +47,73 @@ pub fn render(f: &mut Frame, app: &mut App) {
     render_body(f, app, v[2]);
     progress::render(f, app, v[3]);
     status::render(f, app, v[4]);
+    render_tidal_login(f, app, area);
+}
+
+/// Centered popup shown while the Mopidy server has no Tidal session.
+fn render_tidal_login(f: &mut Frame, app: &App, area: Rect) {
+    use ratatui::widgets::{Block, BorderType, Borders, Clear, Wrap};
+    let Some(url) = app.tidal_login.as_deref() else { return };
+    if app.tidal_login_hidden {
+        return;
+    }
+    // Device code at the end of link.tidal.com/XXXXX, handy on another device.
+    let code = url
+        .split("://")
+        .nth(1)
+        .filter(|rest| rest.starts_with("link.tidal.com") || rest.contains("tidal.com/"))
+        .and_then(|rest| rest.rsplit('/').next())
+        .filter(|c| !c.is_empty());
+    let t = &app.theme;
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Connect your Tidal account",
+            Style::default().fg(t.fg_strong).add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "The Mopidy server isn't signed in to Tidal. Open the link, sign in and approve it:",
+            Style::default().fg(t.fg),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(url.to_string(), Style::default().fg(t.accent).add_modifier(Modifier::BOLD))),
+    ];
+    if let Some(c) = code {
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Code  ", Style::default().fg(t.fg_muted)),
+            Span::styled(c.to_string(), Style::default().fg(t.fg_strong).add_modifier(Modifier::BOLD)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled("Waiting for authorization…", Style::default().fg(t.fg_muted))));
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("[Enter]", Style::default().fg(t.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(" open in browser   ", Style::default().fg(t.fg)),
+        Span::styled("[Esc]", Style::default().fg(t.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(" hide ([!] to show again)", Style::default().fg(t.fg)),
+    ]));
+
+    let w = area.width.saturating_sub(4).clamp(20, 72);
+    let h = (lines.len() as u16 + 4 + (url.len() as u16 / w.saturating_sub(4).max(1))).min(area.height);
+    let r = Rect {
+        x: area.x + (area.width.saturating_sub(w)) / 2,
+        y: area.y + (area.height.saturating_sub(h)) / 2,
+        width: w.min(area.width),
+        height: h,
+    };
+    f.render_widget(Clear, r);
+    f.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(t.accent))
+                .padding(ratatui::widgets::Padding::horizontal(1)),
+        ),
+        r,
+    );
 }
 
 fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
