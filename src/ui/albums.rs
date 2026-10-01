@@ -56,20 +56,11 @@ fn render_grid(f: &mut Frame, app: &mut App, area: Rect) {
     // Cell dimensions. We want the cover to render SQUARE in pixels, so
     // the height-in-cells must match width-in-cells × (cell_w_px / cell_h_px).
     // Then add 4 rows of text + 2 rows of border below.
-    let target_cell_w: u16 = 28;
-    let cell_w = target_cell_w.min(inner.width);
-    let cols = ((inner.width / cell_w) as usize).max(1);
-    let cell_w = (inner.width / cols as u16).max(20);
     let fs = app.picker.font_size();
-    // Cover height (in cells) needed to be square at `cell_w` cells wide.
-    // Strip 2 for the border + horizontal-padding rows the card adds.
-    let cover_inner_w = cell_w.saturating_sub(4); // border + padding
-    let cover_h = ((cover_inner_w as u32 * fs.width as u32)
-        / fs.height.max(1) as u32)
-        .max(5) as u16;
-    let text_h: u16 = 4;
-    let cell_h = cover_h + text_h + 2; // borders top + bottom
-    let rows_visible = ((inner.height / cell_h) as usize).max(1);
+    let GridLayout { cols, cell_w, cell_h, rows: rows_visible } =
+        grid_layout(inner.width, inner.height, fs.width, fs.height);
+    app.albums.grid_cols = cols;
+    app.albums.grid_rows = rows_visible;
 
     // Scroll selection into view.
     let sel = app.albums.grid_index.min(app.albums.items.len() - 1);
@@ -118,6 +109,44 @@ fn render_grid(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// Rows of text under a cover: name, artist, source chip + year.
+const CARD_TEXT_ROWS: u16 = 3;
+
+#[derive(Debug, PartialEq, Eq)]
+struct GridLayout {
+    cols: usize,
+    cell_w: u16,
+    cell_h: u16,
+    rows: usize,
+}
+
+/// Card size for a grid area of `w`×`h` cells and a font of `fw`×`fh` pixels.
+///
+/// Covers are kept square. Cards are as big as possible (28 cells wide) unless
+/// that leaves room for only one row, in which case they shrink (down to 16
+/// cells) until at least two rows of albums fit — a single row would leave
+/// most of a tall panel empty.
+fn grid_layout(w: u16, h: u16, fw: u16, fh: u16) -> GridLayout {
+    let layout_for = |target_cell_w: u16| {
+        let cell_w = target_cell_w.min(w).max(1);
+        let cols = ((w / cell_w) as usize).max(1);
+        let cell_w = (w / cols as u16).max(16);
+        // Cover height (in cells) needed to be square at `cell_w` cells wide.
+        // Strip 4 for the border + horizontal-padding columns the card adds.
+        let cover_inner_w = cell_w.saturating_sub(4);
+        let cover_h = ((cover_inner_w as u32 * fw as u32) / fh.max(1) as u32).max(5) as u16;
+        let cell_h = cover_h + CARD_TEXT_ROWS + 2; // borders top + bottom
+        let rows = ((h / cell_h) as usize).max(1);
+        GridLayout { cols, cell_w, cell_h, rows }
+    };
+    (16..=28u16)
+        .rev()
+        .step_by(2)
+        .map(layout_for)
+        .find(|l| l.rows >= 2)
+        .unwrap_or_else(|| layout_for(28))
+}
+
 fn render_card(f: &mut Frame, app: &mut App, area: Rect, card: &AlbumCard, selected: bool) {
     let border_style = if selected {
         Style::default()
@@ -137,7 +166,7 @@ fn render_card(f: &mut Frame, app: &mut App, area: Rect, card: &AlbumCard, selec
     // Cover top, metadata below.
     let rows = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(4)])
+        .constraints([Constraint::Min(3), Constraint::Length(CARD_TEXT_ROWS)])
         .split(inner);
 
     render_thumbnail(f, app, rows[0], card);
@@ -588,4 +617,42 @@ fn render_detail_right(f: &mut Frame, app: &mut App, area: Rect, detail: &AlbumD
     f.render_stateful_widget(list, rows[5], &mut track_state);
     // Silence unused-write warnings on Alignment when not used here.
     let _ = Alignment::Center;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grid_layout;
+
+    // iTerm2 on a retina Mac: 14x30 px cells.
+    const FW: u16 = 14;
+    const FH: u16 = 30;
+
+    #[test]
+    fn shrinks_covers_to_fit_two_rows_in_a_typical_window() {
+        // The panel from a ~128x45 window: 124 columns by 25 rows inside the block.
+        let l = grid_layout(124, 25, FW, FH);
+        assert!(l.rows >= 2, "{l:?}");
+        assert!(l.cols >= 5, "{l:?}");
+        assert!(l.cell_h * l.rows as u16 <= 25, "{l:?}");
+    }
+
+    #[test]
+    fn keeps_big_covers_when_the_panel_is_tall() {
+        let l = grid_layout(124, 60, FW, FH);
+        assert!(l.rows >= 2 && l.cell_w >= 24, "{l:?}");
+    }
+
+    #[test]
+    fn falls_back_to_one_big_row_when_even_small_covers_do_not_fit_twice() {
+        let l = grid_layout(100, 12, FW, FH);
+        assert_eq!(l.rows, 1);
+        assert!(l.cell_w >= 24, "{l:?}");
+    }
+
+    #[test]
+    fn never_panics_on_tiny_areas() {
+        for (w, h) in [(0, 0), (1, 1), (10, 3), (200, 1)] {
+            let _ = grid_layout(w, h, FW, FH);
+        }
+    }
 }

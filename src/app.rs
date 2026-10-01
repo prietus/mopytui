@@ -290,6 +290,10 @@ pub struct AlbumsState {
     pub items: Vec<AlbumCard>,
     pub grid_index: usize,
     pub grid_offset_row: usize,
+    /// Columns / visible rows of the grid as last rendered, so keyboard
+    /// navigation moves by what is actually on screen.
+    pub grid_cols: usize,
+    pub grid_rows: usize,
     pub cover_protocols: HashMap<String, ratatui_image::protocol::StatefulProtocol>,
     pub cover_protocol_sizes: HashMap<String, (u16, u16)>,
     pub detail: Option<AlbumDetail>,
@@ -307,6 +311,8 @@ impl Default for AlbumsState {
             items: Vec::new(),
             grid_index: 0,
             grid_offset_row: 0,
+            grid_cols: 0,
+            grid_rows: 0,
             cover_protocols: HashMap::new(),
             cover_protocol_sizes: HashMap::new(),
             detail: None,

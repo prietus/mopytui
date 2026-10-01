@@ -60,8 +60,7 @@ fn handle_albums_grid(app: &mut App, key: KeyEvent) -> Cmd {
         }
         return Cmd::None;
     }
-    // Cols is recomputed at render time; mirror the formula here so input
-    // navigation jumps by the right amount.
+    // Cols is recomputed at render time and stored in `grid_cols`.
     let cols = effective_cols(app);
     let cur = app.albums.grid_index;
     match key.code {
@@ -112,14 +111,13 @@ fn handle_albums_grid(app: &mut App, key: KeyEvent) -> Cmd {
     }
 }
 
-/// Approximate grid columns count for keyboard navigation. Mirrors the
-/// render-time formula so j/k jump rows that visually match the layout.
+/// Grid columns for keyboard navigation: what the last render actually laid
+/// out (the card size adapts to the panel), so j/k jump exactly one visual row.
 fn effective_cols(app: &App) -> usize {
-    let _ = app;
-    // Mirror render-time formula in ui/albums.rs (inner.width / 28). Without
-    // plumbing terminal size here we default to 4 — matches typical
-    // terminals at 120-cell width after chrome.
-    4
+    match app.albums.grid_cols {
+        0 => 4, // before the first render
+        n => n,
+    }
 }
 
 fn handle_albums_detail(app: &mut App, key: KeyEvent) -> Cmd {
