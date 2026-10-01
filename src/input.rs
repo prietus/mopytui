@@ -438,6 +438,16 @@ fn handle_queue(app: &mut App, key: KeyEvent) -> Cmd {
             if i == 0 { return Cmd::None }
             Cmd::MoveQueue { start: i as u32, end: i as u32 + 1, to: i as u32 - 1 }
         }
+        KeyCode::Char('f') => {
+            // Add/remove the selected track's album (Tidal) to/from the library.
+            let Some(i) = app.queue_state.table.selected() else { return Cmd::None };
+            app.queue
+                .get(i)
+                .and_then(|t| t.track.album.as_ref())
+                .and_then(|a| a.uri.clone())
+                .map(Cmd::ToggleFavoriteAlbum)
+                .unwrap_or(Cmd::None)
+        }
         KeyCode::Char('o') => {
             let Some(i) = app.queue_state.table.selected() else { return Cmd::None };
             app.queue.get(i).map(|t| Cmd::StartRadio(t.track.uri.clone())).unwrap_or(Cmd::None)

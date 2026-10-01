@@ -46,7 +46,7 @@ const ROWS: &[(&str, &str)] = &[
     ("L", "toggle synced lyrics panel"),
     ("c", "toggle cover fit ↔ crop"),
     ("v", "cycle visualizer style (bars · mirror · dots · wave)"),
-    ("f", "toggle Tidal favorite (album / current track)"),
+    ("f", "add/remove the Tidal album to/from your library (Albums, Library, Search, Queue, Playing)"),
     ("o", "start Tidal radio from selected / current track or artist — replaces the queue (needs goodies)"),
     ("", ""),
     ("Queue", ""),

@@ -155,7 +155,7 @@ mpris = false       # Linux only
 |           | `Enter`            | Open album detail                       |
 |           | `p`                | Play this album (replace queue)         |
 |           | `a`                | Add album to queue                      |
-|           | `f`                | Toggle Tidal favorite                   |
+|           | `f`                | Add / remove the album to / from your Tidal library |
 |           | `r`                | Reload album collection                 |
 |           | `Esc` / `Backspace`| Back to grid (from detail)              |
 | Library   | `↑↓` / `jk`        | Move selection                          |
@@ -171,13 +171,14 @@ mpris = false       # Linux only
 |           | `Enter` (results)  | Add track · open album · browse artist  |
 |           | `p` (album row)    | Play album                              |
 |           | `a` (album row)    | Queue album                             |
-|           | `f` (album row)    | Toggle Tidal favorite                   |
+|           | `f` (album / track row) | Add / remove the album to / from your Tidal library |
 | Queue     | `↑↓` / `jk`        | Move selection                          |
 |           | `Enter`            | Play this entry                         |
 |           | `d` / `Del`        | Remove                                  |
 |           | `J` / `K`          | Move down / up                          |
 |           | `X`                | Clear                                   |
 |           | `Z`                | Shuffle                                 |
+|           | `f`                | Add / remove the selected track's Tidal album to / from your library |
 | Stats     | `h` / `l`          | Previous / next tab                     |
 |           | `p`                | Cycle period: all time · week · month · year |
 | Playlists | `Enter` (list)     | Open playlist                           |

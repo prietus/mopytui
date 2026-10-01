@@ -116,6 +116,10 @@ pub async fn apply(app: &mut App, cmd: Cmd) -> Result<()> {
         Cmd::BackToAlbumsGrid => {
             app.albums.mode = crate::app::AlbumsMode::Grid;
             app.albums.detail = None;
+            // An album added to the library while in the detail view.
+            if !app.albums.loaded {
+                load_albums(app).await;
+            }
         }
         Cmd::PlayAlbum(uri) => play_album(app, uri).await,
         Cmd::QueueAlbum(uri) => queue_album(app, uri).await,
@@ -1343,10 +1347,18 @@ pub async fn toggle_favorite_album(app: &mut App, uri: String) {
         Ok(true) => {
             if next {
                 app.goodies.favorites.insert(id);
-                app.status.flash("★ favorited", crate::app::StatusKind::Ok);
+                app.status.flash("★ added to your Tidal library", crate::app::StatusKind::Ok);
+                // The Albums grid is built from "My Albums": reload it the
+                // next time it is shown so the new album appears.
+                app.albums.loaded = false;
             } else {
                 app.goodies.favorites.remove(&id);
-                app.status.flash("removed from favorites", crate::app::StatusKind::Info);
+                app.status.flash("removed from your Tidal library", crate::app::StatusKind::Info);
+                // Drop it from the grid right away (no reload needed).
+                if let Some(i) = app.albums.items.iter().position(|c| c.uri == uri) {
+                    app.albums.items.remove(i);
+                    app.albums.grid_index = app.albums.grid_index.min(app.albums.items.len().saturating_sub(1));
+                }
             }
         }
         Ok(false) => app.status.flash(
