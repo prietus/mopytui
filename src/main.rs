@@ -15,6 +15,7 @@ mod app;
 mod audio;
 mod cmd;
 mod config;
+mod draw;
 mod events;
 mod fanart;
 mod images;
@@ -170,8 +171,9 @@ async fn run(
     events: &mut Events,
     mpris: &mpris::MprisHandle,
 ) -> Result<()> {
+    let mut drawer = draw::Drawer::default();
     loop {
-        terminal.draw(|f| ui::render(f, app))?;
+        drawer.draw(terminal, |f| ui::render(f, app))?;
         let ev = events.next().await;
         handle(app, ev, mpris).await?;
         if app.quit { break; }
