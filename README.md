@@ -1,7 +1,7 @@
 <h1 align="center">mopytui</h1>
 
 <p align="center">
-  <img src="assets/demo.gif" width="100%" alt="mopytui demo: queue with cover and spectrum, albums grid, search with detail panel and now playing" />
+  <img src="assets/mopytui.gif" width="100%" alt="mopytui demo: queue with cover and spectrum, albums grid, search with detail panel and now playing" />
 </p>
 
 A full-featured terminal client for [Mopidy](https://mopidy.com/) — built
@@ -16,15 +16,15 @@ halfblocks** — detected at runtime.
 ## Screenshots
 
 <p align="center">
-  <img src="assets/shots/queue.png" width="48%" alt="Queue with cover art, audio chain and spectrum visualizer" />
-  <img src="assets/shots/albums.png" width="48%" alt="Albums grid with real covers" />
+  <img src="assets/screenshots/queue.png" width="48%" alt="Queue with cover art, audio chain and spectrum visualizer" />
+  <img src="assets/screenshots/albums.png" width="48%" alt="Albums grid with real covers" />
 </p>
 <p align="center">
-  <img src="assets/shots/search.png" width="48%" alt="Search: results grouped by Tidal and Local, with a detail panel" />
-  <img src="assets/shots/info.png" width="48%" alt="Info view with album credits and Tidal artist biography" />
+  <img src="assets/screenshots/search.png" width="48%" alt="Search: results grouped by Tidal and Local, with a detail panel" />
+  <img src="assets/screenshots/info.png" width="48%" alt="Info view with album credits and Tidal artist biography" />
 </p>
 <p align="center">
-  <img src="assets/shots/playing.png" width="48%" alt="Now Playing with synced lyrics" />
+  <img src="assets/screenshots/playing.png" width="48%" alt="Now Playing with synced lyrics" />
 </p>
 
 ## Features
