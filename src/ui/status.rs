@@ -27,13 +27,21 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         return;
     }
 
-    let hints = [
+    let mut hints = vec![
         ("space", "play/pause"),
         (">", "next"),
         ("/", "search"),
         ("f", "favorite"),
-        ("?", "help"),
     ];
+    // Context-sensitive "go back" key, shown where the view has a way up.
+    match app.view {
+        crate::app::View::Library | crate::app::View::Playlists => hints.push(("h", "back")),
+        crate::app::View::Albums if app.albums.mode == crate::app::AlbumsMode::Detail => {
+            hints.push(("esc", "back"))
+        }
+        _ => {}
+    }
+    hints.push(("?", "help"));
     let mut spans: Vec<Span> = Vec::new();
     spans.push(Span::raw(" "));
     for (i, (k, v)) in hints.iter().enumerate() {
