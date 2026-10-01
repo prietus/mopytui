@@ -66,7 +66,10 @@ halfblocks** — detected at runtime.
   `mopidy-mpd`'s `status:audio` (bit-perfect verification).
 - **Tidal Goodies** stats (recently played, most played, top artists/albums,
   record labels, listening heatmap, genres, totals — filterable by week /
-  month / year) and **Tidal radio** (`o` on any track or artist) when the server
+  month / year), **Tidal radio** (`o` on any track or artist) and **Tidal
+  review, artist bio & track credits** in the Info view (for Tidal tracks and for local
+  albums goodies can match to Tidal; preferred over Wikipedia, and the bio's
+  picture is the artist avatar when no fanart.tv key is set) when the server
   has [`mopidy-tidal-goodies`](https://github.com/yaragon/mopidy-tidal-goodies)
   installed.
 - Live updates via `mpd` `idle` subscription (player/mixer/options/playlist).

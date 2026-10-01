@@ -20,11 +20,77 @@ pub struct AudioActive {
     pub verdict: Option<String>,
 }
 
+/// Editorial text from Tidal (album review / artist biography) as served by
+/// goodies. `image` is only set for artist bios.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TidalText {
+    pub text: String,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub image: Option<String>,
+}
+
 /// A Tidal radio: `(uri, title)` of each track and the seed's title.
 #[derive(Debug, Clone, Default)]
 pub struct Radio {
     pub tracks: Vec<(String, String)>,
     pub seed_title: Option<String>,
+}
+
+/// One credit line for a track: a role and who held it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TidalCredit {
+    pub role: String,
+    pub names: Vec<String>,
+}
+
+/// What goodies knows about a `local:album:`: its Tidal match (only when it
+/// is the same album, not a compilation sharing recordings) and the credits
+/// payload (tags first, Tidal as fallback) in the shape of `/albums/<id>/credits`.
+#[derive(Debug, Clone, Default)]
+pub struct LocalAlbum {
+    pub tidal: Option<(String, Option<String>)>,
+    pub credits: Option<Value>,
+}
+
+/// Pick the credits of one track out of an album credits payload
+/// (`{"tracks": [{"id", "title", "track_num", "credits": [...]}]}`). Matches
+/// by track id (Tidal URIs end in it, local ones are the full URI), then by
+/// title.
+pub fn track_credits(v: &Value, track_uri: &str, title: &str) -> Vec<TidalCredit> {
+    let Some(tracks) = v.get("tracks").and_then(|t| t.as_array()) else { return Vec::new() };
+    let last = track_uri.rsplit(':').next().unwrap_or("");
+    let id_of = |t: &Value| t.get("id").and_then(|x| x.as_str().map(String::from).or_else(|| x.as_u64().map(|n| n.to_string())));
+    let found = tracks
+        .iter()
+        .find(|t| id_of(t).is_some_and(|id| id == track_uri || (!last.is_empty() && id == last)))
+        .or_else(|| {
+            let want = title.trim().to_lowercase();
+            if want.is_empty() { return None; }
+            tracks.iter().find(|t| {
+                t.get("title").and_then(|x| x.as_str()).is_some_and(|s| s.trim().to_lowercase() == want)
+            })
+        });
+    let Some(t) = found else { return Vec::new() };
+    t.get("credits")
+        .and_then(|c| c.as_array())
+        .map(|groups| {
+            groups
+                .iter()
+                .filter_map(|g| {
+                    let role = g.get("role")?.as_str()?.to_string();
+                    let names: Vec<String> = g
+                        .get("contributors")?
+                        .as_array()?
+                        .iter()
+                        .filter_map(|c| c.get("name").and_then(|n| n.as_str()).map(String::from))
+                        .collect();
+                    (!names.is_empty()).then_some(TidalCredit { role, names })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[derive(Clone)]
@@ -478,6 +544,63 @@ impl Client {
         Ok(self.inner.get(url).send().await?.error_for_status()?.json().await?)
     }
 
+    /// GET a goodies text endpoint. Any non-success status (no review, Tidal
+    /// not logged in, plugin missing) is treated as "nothing to show".
+    async fn goodies_text(&self, path: &str) -> Result<Option<TidalText>> {
+        let resp = self.inner.get(self.goodies_url(path)).send().await?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let v: Value = resp.json().await?;
+        let text = v.get("text").and_then(|t| t.as_str()).map(str::trim).unwrap_or("");
+        if text.is_empty() {
+            return Ok(None);
+        }
+        let get = |k: &str| v.get(k).and_then(|x| x.as_str()).map(String::from);
+        Ok(Some(TidalText { text: text.to_string(), source: get("source"), image: get("image") }))
+    }
+
+    pub async fn goodies_album_review(&self, id: &str) -> Result<Option<TidalText>> {
+        self.goodies_text(&format!("/tidal/albums/{id}/review")).await
+    }
+
+    pub async fn goodies_artist_bio(&self, id: &str) -> Result<Option<TidalText>> {
+        self.goodies_text(&format!("/tidal/artists/{id}/bio")).await
+    }
+
+    /// Per-track credits for a Tidal album, raw (see [`track_credits`]).
+    pub async fn goodies_album_credits(&self, id: &str) -> Result<Option<Value>> {
+        let resp = self.inner.get(self.goodies_url(&format!("/tidal/albums/{id}/credits"))).send().await?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        Ok(Some(resp.json().await?))
+    }
+
+    /// goodies' view of a `local:album:` (Tidal match + credits). `None` when
+    /// the endpoint isn't available for it.
+    pub async fn goodies_local_album(&self, uri: &str) -> Result<Option<LocalAlbum>> {
+        let resp = self
+            .inner
+            .get(self.goodies_url("/local/album"))
+            .query(&[("uri", uri)])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let v: Value = resp.json().await?;
+        let tidal = v
+            .get("tidal")
+            .filter(|t| t.get("same_album").and_then(|b| b.as_bool()) == Some(true))
+            .and_then(|t| {
+                let id = |k: &str| t.get(k).and_then(|x| x.as_str().map(String::from).or_else(|| x.as_u64().map(|n| n.to_string())));
+                id("album_id").map(|a| (a, id("artist_id")))
+            });
+        let credits = v.get("credits").filter(|c| !c.is_null()).cloned();
+        Ok(Some(LocalAlbum { tidal, credits }))
+    }
+
     pub async fn goodies_stats_top_labels(&self, limit: u32, since: Option<i64>) -> Result<Value> {
         let mut url = format!("{}?limit={limit}", self.goodies_url("/stats/top-labels"));
         if let Some(s) = since { url.push_str(&format!("&since={s}")); }
@@ -565,5 +688,38 @@ impl Client {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
         Ok(Some(AudioActive { dac_label, format, verdict }))
+    }
+}
+
+#[cfg(test)]
+mod credits_tests {
+    use super::track_credits;
+    use serde_json::json;
+
+    fn payload() -> serde_json::Value {
+        json!({"album_id": "1", "tracks": [
+            {"id": "158153", "title": "That Old Feeling", "credits": [
+                {"role": "Producer", "contributors": [{"name": "Richard Bock", "id": "8021563"}]},
+                {"role": "Composer", "contributors": [{"name": "Lew Brown", "id": null}, {"name": "Sammy Fain", "id": null}]},
+                {"role": "Empty", "contributors": []}
+            ]},
+            {"id": "local:track:abc", "title": "Other", "credits": [
+                {"role": "Mixer", "contributors": [{"name": "Someone"}]}
+            ]}
+        ]})
+    }
+
+    #[test]
+    fn matches_tidal_uri_by_trailing_id() {
+        let c = track_credits(&payload(), "tidal:track:8992:534050382:158153", "x");
+        assert_eq!(c.len(), 2); // empty role dropped
+        assert_eq!(c[1].names, vec!["Lew Brown", "Sammy Fain"]);
+    }
+
+    #[test]
+    fn matches_local_uri_and_falls_back_to_title() {
+        assert_eq!(track_credits(&payload(), "local:track:abc", "")[0].role, "Mixer");
+        assert_eq!(track_credits(&payload(), "tidal:track:9", " that old feeling ")[0].role, "Producer");
+        assert!(track_credits(&payload(), "tidal:track:9", "nope").is_empty());
     }
 }

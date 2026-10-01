@@ -89,7 +89,22 @@ fn render_album(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
         }
-        if let Some(w) = &meta.wiki {
+        if !meta.track_credits.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "Track credits",
+                Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD),
+            )));
+            for c in &meta.track_credits {
+                lines.push(Line::from(vec![
+                    Span::styled(format!("  {}", c.role), Style::default().fg(app.theme.fg_muted)),
+                    Span::styled(format!("  {}", c.names.join(", ")), Style::default().fg(app.theme.fg)),
+                ]));
+            }
+        }
+        if let Some(t) = &meta.tidal {
+            tidal_text(&mut lines, app, "Review", t, 14);
+        } else if let Some(w) = &meta.wiki {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 w.title.clone(),
@@ -102,7 +117,7 @@ fn render_album(f: &mut Frame, app: &mut App, area: Rect) {
                 )));
             }
         }
-        if meta.release.is_none() && meta.wiki.is_none() {
+        if meta.release.is_none() && meta.wiki.is_none() && meta.tidal.is_none() && meta.track_credits.is_empty() {
             lines.push(Line::from(Span::styled(
                 "No metadata available for this album.",
                 Style::default().fg(app.theme.fg_muted),
@@ -189,7 +204,9 @@ fn render_artist(f: &mut Frame, app: &mut App, area: Rect) {
                 }
             }
         }
-        if let Some(w) = &meta.wiki {
+        if let Some(t) = &meta.tidal {
+            tidal_text(&mut lines, app, "Biography", t, 16);
+        } else if let Some(w) = &meta.wiki {
             lines.push(Line::from(""));
             lines.push(Line::from(Span::styled(
                 w.title.clone(),
@@ -202,7 +219,7 @@ fn render_artist(f: &mut Frame, app: &mut App, area: Rect) {
                 )));
             }
         }
-        if meta.info.is_none() && meta.wiki.is_none() {
+        if meta.info.is_none() && meta.wiki.is_none() && meta.tidal.is_none() {
             lines.push(Line::from(Span::styled(
                 "No metadata available for this artist.",
                 Style::default().fg(app.theme.fg_muted),
@@ -220,6 +237,31 @@ fn render_artist(f: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(lines).wrap(Wrap { trim: false }),
         text_area,
     );
+}
+
+/// Tidal editorial text (review / bio) with its credit line, e.g. `TiVo`.
+fn tidal_text(
+    lines: &mut Vec<Line>,
+    app: &App,
+    heading: &str,
+    t: &crate::mopidy::client::TidalText,
+    max_lines: usize,
+) {
+    let title = match t.source.as_deref().filter(|s| !s.is_empty()) {
+        Some(src) => format!("{heading} · Tidal ({src})"),
+        None => format!("{heading} · Tidal"),
+    };
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        title,
+        Style::default().fg(app.theme.accent_alt).add_modifier(Modifier::BOLD),
+    )));
+    for line in t.text.lines().take(max_lines) {
+        lines.push(Line::from(Span::styled(
+            line.to_string(),
+            Style::default().fg(app.theme.fg),
+        )));
+    }
 }
 
 fn field(lines: &mut Vec<Line>, app: &App, label: &str, value: &str) {

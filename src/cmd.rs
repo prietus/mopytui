@@ -581,11 +581,13 @@ pub fn schedule_metadata_for_track(app: &mut App, track: &Track) {
         slot.artist_avatar_key = None;
     }
     let state = app.metadata.clone();
+    let client = app.client.clone();
+    let seed_track = track.clone();
     let slot = app.meta_slot.clone();
     let images = app.images.clone();
     let fanart_api_key = app.cfg.fanart_api_key.clone().unwrap_or_default();
     tokio::spawn(async move {
-        let (album_res, artist_res) = tokio::join!(
+        let (album_res, artist_res, tidal_lookup) = tokio::join!(
             async {
                 if album.trim().is_empty() {
                     None
@@ -594,7 +596,16 @@ pub fn schedule_metadata_for_track(app: &mut App, track: &Track) {
                 }
             },
             state.artist(&artist),
+            fetch_tidal_texts(&client, &seed_track),
         );
+        let mut album_res = album_res;
+        let mut artist_res = artist_res;
+        if let Some(a) = album_res.as_mut() {
+            a.tidal = tidal_lookup.review;
+            a.track_credits = tidal_lookup.credits;
+        }
+        let tidal_image = tidal_lookup.bio.as_ref().and_then(|t| t.image.clone());
+        artist_res.tidal = tidal_lookup.bio;
 
         // Capture the MBID before moving artist_res into the slot.
         let artist_mbid = artist_res
@@ -611,39 +622,108 @@ pub fn schedule_metadata_for_track(app: &mut App, track: &Track) {
             }
         }
 
-        // Try to pull an artist thumbnail from fanart.tv. Requires both an
-        // API key and the MusicBrainz id; otherwise silently skip.
+        // Artist thumbnail: fanart.tv when configured (needs an API key and
+        // the MusicBrainz id), else the picture Tidal serves with the bio.
+        let mut avatar: Option<(String, String)> = None;
         if let Some(mbid) = artist_mbid
             && !fanart_api_key.is_empty()
             && let Some(url) = state.fanart.artist_image_url(&mbid, &fanart_api_key).await
         {
-            let cache_key = format!("fanart:artist:{mbid}");
-            // Reuse existing decode if cached from a previous run.
-            if !images.contains(&cache_key) {
-                match state.fanart.download_bytes(&url).await {
-                    Ok(bytes) => match image::load_from_memory(&bytes) {
-                        Ok(img) => {
-                            images.put(cache_key.clone(), std::sync::Arc::new(img));
-                        }
-                        Err(e) => tracing::warn!(
-                            target: "mopytui::fanart",
-                            "decode {mbid}: {e}"
-                        ),
-                    },
+            avatar = Some((format!("fanart:artist:{mbid}"), url));
+        }
+        if avatar.is_none()
+            && let Some(url) = tidal_image
+        {
+            avatar = Some((format!("tidal:artist-image:{url}"), url));
+        }
+        let Some((cache_key, url)) = avatar else { return };
+        // Reuse existing decode if cached from a previous run.
+        if !images.contains(&cache_key) {
+            match state.fanart.download_bytes(&url).await {
+                Ok(bytes) => match image::load_from_memory(&bytes) {
+                    Ok(img) => {
+                        images.put(cache_key.clone(), std::sync::Arc::new(img));
+                    }
                     Err(e) => tracing::warn!(
                         target: "mopytui::fanart",
-                        "download {mbid}: {e:#}"
+                        "decode {cache_key}: {e}"
                     ),
-                }
+                },
+                Err(e) => tracing::warn!(
+                    target: "mopytui::fanart",
+                    "download {cache_key}: {e:#}"
+                ),
             }
-            if images.contains(&cache_key) {
-                let mut s = slot.lock().unwrap();
-                if s.key.as_deref() == Some(key.as_str()) {
-                    s.artist_avatar_key = Some(cache_key);
-                }
+        }
+        if images.contains(&cache_key) {
+            let mut s = slot.lock().unwrap();
+            if s.key.as_deref() == Some(key.as_str()) {
+                s.artist_avatar_key = Some(cache_key);
             }
         }
     });
+}
+
+#[derive(Default)]
+struct TidalLookup {
+    review: Option<crate::mopidy::client::TidalText>,
+    bio: Option<crate::mopidy::client::TidalText>,
+    credits: Vec<crate::mopidy::client::TidalCredit>,
+}
+
+/// Resolve the playing track's Tidal ids and fetch goodies' album review,
+/// artist bio and the track's credits. Tidal URIs carry the ids directly;
+/// `local:album:` goes through goodies' Tidal match (same album only) and
+/// brings its own tag-based credits. Every failure just means "nothing".
+async fn fetch_tidal_texts(
+    client: &crate::mopidy::client::Client,
+    track: &Track,
+) -> TidalLookup {
+    use crate::mopidy::client::track_credits;
+    let album_uri = track.album.as_ref().and_then(|a| a.uri.as_deref());
+    let artist_uri = track.artists.first().and_then(|a| a.uri.as_deref());
+    let numeric = |s: &str| s.chars().all(|c| c.is_ascii_digit()) && !s.is_empty();
+    let mut album_id = album_uri
+        .and_then(|u| u.strip_prefix("tidal:album:"))
+        .filter(|s| numeric(s))
+        .map(String::from);
+    let mut artist_id = artist_uri
+        .and_then(|u| u.strip_prefix("tidal:artist:"))
+        .filter(|s| numeric(s))
+        .map(String::from);
+    let mut credits = Vec::new();
+    let mut tidal_credits_json = None;
+    if album_id.is_none()
+        && let Some(u) = album_uri.filter(|u| u.starts_with("local:album:"))
+        && let Ok(Some(local)) = client.goodies_local_album(u).await
+    {
+        if let Some(cj) = &local.credits {
+            credits = track_credits(cj, &track.uri, &track.name);
+        }
+        if let Some((a, ar)) = local.tidal {
+            album_id = Some(a);
+            artist_id = artist_id.or(ar);
+        }
+    } else if let Some(id) = &album_id {
+        tidal_credits_json = client.goodies_album_credits(id).await.ok().flatten();
+    }
+    if let Some(cj) = &tidal_credits_json {
+        credits = track_credits(cj, &track.uri, &track.name);
+    }
+    let review = async {
+        match &album_id {
+            Some(id) => client.goodies_album_review(id).await.ok().flatten(),
+            None => None,
+        }
+    };
+    let bio = async {
+        match &artist_id {
+            Some(id) => client.goodies_artist_bio(id).await.ok().flatten(),
+            None => None,
+        }
+    };
+    let (review, bio) = tokio::join!(review, bio);
+    TidalLookup { review, bio, credits }
 }
 
 // ─── albums ─────────────────────────────────────────────────────────────────
