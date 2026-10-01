@@ -22,6 +22,15 @@ pub fn handle_key(app: &mut App, key: KeyEvent) -> Cmd {
         };
     }
 
+    // Ctrl+F shows/hides the advanced search filters (works while typing too).
+    if app.view == View::Search
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('f'))
+    {
+        toggle_search_filters(app);
+        return Cmd::None;
+    }
+
     // The Search form owns the keyboard when focus is on a text field —
     // otherwise plain letters would trigger global shortcuts (`q` quit, etc).
     if app.view == View::Search && matches!(app.search.focus, SearchFocus::Field(_)) {
@@ -458,32 +467,38 @@ fn handle_queue(app: &mut App, key: KeyEvent) -> Cmd {
     }
 }
 
-/// Linear focus order for the form. Used by ↑/↓/Tab navigation.
-const SEARCH_FOCUS_ORDER: &[SearchFocus] = &[
-    SearchFocus::Field(0),
-    SearchFocus::Field(1),
-    SearchFocus::Field(2),
-    SearchFocus::Field(3),
-    SearchFocus::Field(4),
-    SearchFocus::Field(5),
-    SearchFocus::Field(6),
-    SearchFocus::Field(7),
-    SearchFocus::Source(0),
-    SearchFocus::Source(1),
-    SearchFocus::SearchBtn,
-    SearchFocus::ResetBtn,
-    SearchFocus::Results,
-];
+/// Linear focus order for the search bar. Used by ↑/↓/Tab navigation. With the
+/// advanced filters hidden only the query, the two sources and the results
+/// can take focus.
+fn search_focus_order(show_filters: bool) -> Vec<SearchFocus> {
+    let mut order = vec![SearchFocus::Field(0)];
+    if show_filters {
+        order.extend((1..8).map(SearchFocus::Field));
+    }
+    order.extend([SearchFocus::Source(0), SearchFocus::Source(1)]);
+    if show_filters {
+        order.extend([SearchFocus::SearchBtn, SearchFocus::ResetBtn]);
+    }
+    order.push(SearchFocus::Results);
+    order
+}
 
-fn focus_index(f: SearchFocus) -> usize {
-    SEARCH_FOCUS_ORDER.iter().position(|x| *x == f).unwrap_or(0)
+fn toggle_search_filters(app: &mut App) {
+    app.search.show_filters = !app.search.show_filters;
+    if !app.search.show_filters {
+        // Hidden fields and buttons can't hold the focus any more.
+        let order = search_focus_order(false);
+        if !order.contains(&app.search.focus) {
+            app.search.focus = SearchFocus::Field(0);
+        }
+    }
 }
 
 fn move_focus(app: &mut App, delta: i32) {
-    let cur = focus_index(app.search.focus) as i32;
-    let len = SEARCH_FOCUS_ORDER.len() as i32;
-    let next = (cur + delta).clamp(0, len - 1) as usize;
-    let target = SEARCH_FOCUS_ORDER[next];
+    let order = search_focus_order(app.search.show_filters);
+    let cur = order.iter().position(|x| *x == app.search.focus).unwrap_or(0) as i32;
+    let next = (cur + delta).clamp(0, order.len() as i32 - 1) as usize;
+    let target = order[next];
     // Don't jump into Results when there are none — feels broken.
     if matches!(target, SearchFocus::Results) && app.search.flat.is_empty() {
         return;
@@ -500,10 +515,12 @@ fn handle_search_field(app: &mut App, key: KeyEvent) -> Cmd {
         KeyCode::Esc => {
             // Bail out to the Results list if we have any, otherwise to the
             // Search button so the user can still trigger a query.
-            app.search.focus = if app.search.flat.is_empty() {
+            app.search.focus = if !app.search.flat.is_empty() {
+                SearchFocus::Results
+            } else if app.search.show_filters {
                 SearchFocus::SearchBtn
             } else {
-                SearchFocus::Results
+                SearchFocus::Source(0)
             };
             Cmd::None
         }
@@ -572,73 +589,59 @@ fn handle_search(app: &mut App, key: KeyEvent) -> Cmd {
             _ => Cmd::None,
         },
         SearchFocus::Results => {
-            let len = app.search.flat.len();
             match key.code {
                 KeyCode::Char('/') => {
                     app.search.focus = SearchFocus::Field(0);
                     Cmd::None
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
-                    let cur = app.search.state.selected().unwrap_or(0) as i32;
-                    if cur == 0 {
-                        // Bounce up into the form when at the top of results.
-                        app.search.focus = SearchFocus::SearchBtn;
-                    } else {
-                        let next = (cur - 1).max(0) as usize;
-                        app.search.state.select(Some(next));
+                    // Bounce up into the search bar when at the top.
+                    if !app.search.select_hit_delta(-1) {
+                        app.search.focus = SearchFocus::Field(0);
                     }
                     Cmd::None
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    let cur = app.search.state.selected().unwrap_or(0) as i32;
-                    let next = (cur + 1).clamp(0, len.saturating_sub(1) as i32) as usize;
-                    app.search.state.select(Some(next));
+                    app.search.select_hit_delta(1);
+                    Cmd::None
+                }
+                KeyCode::PageUp => {
+                    for _ in 0..10 { if !app.search.select_hit_delta(-1) { break; } }
+                    Cmd::None
+                }
+                KeyCode::PageDown => {
+                    for _ in 0..10 { if !app.search.select_hit_delta(1) { break; } }
                     Cmd::None
                 }
                 KeyCode::BackTab => { move_focus(app, -1); Cmd::None }
                 KeyCode::Tab => { move_focus(app, 1); Cmd::None }
-                KeyCode::Enter => {
-                    let Some(i) = app.search.state.selected() else { return Cmd::None };
-                    match app.search.flat.get(i) {
-                        Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
-                        Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::OpenAlbum).unwrap_or(Cmd::None),
-                        Some(SearchHit::Artist(a)) => a.uri.clone().map(|u| Cmd::BrowseInto(Some(u), a.name.clone())).unwrap_or(Cmd::None),
-                        None => Cmd::None,
-                    }
-                }
-                KeyCode::Char('f') => {
-                    let Some(i) = app.search.state.selected() else { return Cmd::None };
-                    match app.search.flat.get(i) {
-                        Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::ToggleFavoriteAlbum).unwrap_or(Cmd::None),
-                        Some(SearchHit::Track(t)) => t.album.as_ref().and_then(|al| al.uri.clone())
-                            .map(Cmd::ToggleFavoriteAlbum).unwrap_or(Cmd::None),
-                        _ => Cmd::None,
-                    }
-                }
-                KeyCode::Char('o') => {
-                    let Some(i) = app.search.state.selected() else { return Cmd::None };
-                    match app.search.flat.get(i) {
-                        Some(SearchHit::Track(t)) => Cmd::StartRadio(t.uri.clone()),
-                        Some(SearchHit::Artist(a)) => a.uri.clone().map(Cmd::StartRadio).unwrap_or(Cmd::None),
-                        _ => Cmd::None,
-                    }
-                }
-                KeyCode::Char('p') => {
-                    let Some(i) = app.search.state.selected() else { return Cmd::None };
-                    match app.search.flat.get(i) {
-                        Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::PlayAlbum).unwrap_or(Cmd::None),
-                        Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
-                        _ => Cmd::None,
-                    }
-                }
-                KeyCode::Char('a') => {
-                    let Some(i) = app.search.state.selected() else { return Cmd::None };
-                    match app.search.flat.get(i) {
-                        Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::QueueAlbum).unwrap_or(Cmd::None),
-                        Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
-                        _ => Cmd::None,
-                    }
-                }
+                KeyCode::Enter => match app.search.selected_hit() {
+                    Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
+                    Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::OpenAlbum).unwrap_or(Cmd::None),
+                    Some(SearchHit::Artist(a)) => a.uri.clone().map(|u| Cmd::BrowseInto(Some(u), a.name.clone())).unwrap_or(Cmd::None),
+                    None => Cmd::None,
+                },
+                KeyCode::Char('f') => match app.search.selected_hit() {
+                    Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::ToggleFavoriteAlbum).unwrap_or(Cmd::None),
+                    Some(SearchHit::Track(t)) => t.album.as_ref().and_then(|al| al.uri.clone())
+                        .map(Cmd::ToggleFavoriteAlbum).unwrap_or(Cmd::None),
+                    _ => Cmd::None,
+                },
+                KeyCode::Char('o') => match app.search.selected_hit() {
+                    Some(SearchHit::Track(t)) => Cmd::StartRadio(t.uri.clone()),
+                    Some(SearchHit::Artist(a)) => a.uri.clone().map(Cmd::StartRadio).unwrap_or(Cmd::None),
+                    _ => Cmd::None,
+                },
+                KeyCode::Char('p') => match app.search.selected_hit() {
+                    Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::PlayAlbum).unwrap_or(Cmd::None),
+                    Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
+                    _ => Cmd::None,
+                },
+                KeyCode::Char('a') => match app.search.selected_hit() {
+                    Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::QueueAlbum).unwrap_or(Cmd::None),
+                    Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
+                    _ => Cmd::None,
+                },
                 _ => Cmd::None,
             }
         }

@@ -68,13 +68,14 @@ const ROWS: &[(&str, &str)] = &[
     ("D", "delete playlist"),
     ("", ""),
     ("Search", ""),
-    ("/", "open search (focus first field)"),
-    ("↑/↓ Tab", "navigate fields · sources · buttons · results"),
-    ("type", "edit focused field"),
-    ("Space", "toggle Local/Tidal checkbox"),
-    ("Enter", "run search (form) · play/open (result)"),
-    ("Esc", "jump to results (or Search button if empty)"),
-    ("p / a / f", "play · add · favorite (on result)"),
+    ("/", "open search (focus the query)"),
+    ("type · Enter", "edit the query · run the search (focus moves to the results)"),
+    ("Ctrl+F", "show/hide the advanced filters (artist, album, title, genre…)"),
+    ("Tab", "query → Local/Tidal → results"),
+    ("Space", "toggle the focused Local/Tidal source"),
+    ("j/k ↑/↓", "move over results (grouped by TIDAL / LOCAL, then albums · artists · tracks)"),
+    ("Enter", "play/open the result"),
+    ("p / a / o / f", "play · queue · radio · add to library (on result)"),
 ];
 
 pub fn render(f: &mut Frame, app: &App, area: Rect) {

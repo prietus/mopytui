@@ -165,10 +165,12 @@ mpris = false       # Linux only
 |           | `a` / `A`          | Add to queue (`A` = play after add)     |
 |           | `r`                | `core.library.refresh` on selection     |
 |           | `/`                | Open search                             |
-| Search    | `/`                | Edit input                              |
-|           | `Enter` (editing)  | Run query                               |
+| Search    | `/`                | Edit the query                          |
+|           | `Enter` (editing)  | Run the search; focus moves to the results |
+|           | `Ctrl+F`           | Show / hide the advanced filters        |
 |           | `Esc`              | Leave edit mode                         |
 |           | `Enter` (results)  | Add track · open album · browse artist  |
+|           | `j` / `k`          | Move over results (grouped by Tidal / Local and by albums · artists · tracks) |
 |           | `p` (album row)    | Play album                              |
 |           | `a` (album row)    | Queue album                             |
 |           | `f` (album / track row) | Add / remove the album to / from your Tidal library |

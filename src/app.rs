@@ -221,10 +221,39 @@ impl SearchForm {
 pub struct SearchState {
     pub form: SearchForm,
     pub focus: SearchFocus,
+    /// Show the advanced per-field filters (artist, album, title, …) under
+    /// the query bar. Collapsed by default: just the query and the sources.
+    pub show_filters: bool,
     pub results: Vec<crate::mopidy::models::SearchResult>,
+    /// Hits ordered by source then kind (see `crate::search::group_hits`).
     pub flat: Vec<SearchHit>,
+    /// What the results panel renders: section headers and hits.
+    pub rows: Vec<crate::search::SearchRow>,
+    /// Selection over `rows` (always a hit row).
     pub state: ListState,
     pub last_query: Option<String>,
+}
+
+impl SearchState {
+    /// The highlighted result, if any.
+    pub fn selected_hit(&self) -> Option<&SearchHit> {
+        match self.rows.get(self.state.selected()?)? {
+            crate::search::SearchRow::Hit(i) => self.flat.get(*i),
+            _ => None,
+        }
+    }
+
+    /// Move the selection to the next/previous hit (skipping headers).
+    /// Returns `false` when already at that end.
+    pub fn select_hit_delta(&mut self, delta: i32) -> bool {
+        match crate::search::next_hit_row(&self.rows, self.state.selected(), delta) {
+            Some(i) => {
+                self.state.select(Some(i));
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

@@ -24,6 +24,7 @@ mod lyrics;
 mod metadata;
 mod mopidy;
 mod mpris;
+mod search;
 mod ui;
 
 use app::{App, Cmd};

@@ -560,13 +560,17 @@ pub async fn search(app: &mut App) {
                     flat.push(SearchHit::Track(t.clone()));
                 }
             }
+            let (flat, rows) = crate::search::group_hits(flat);
             app.search.state = ListState::default();
-            if !flat.is_empty() {
-                app.search.state.select(Some(0));
-            }
+            app.search.state.select(crate::search::first_hit_row(&rows));
             app.search.last_query = Some(label_parts.join(" · "));
             app.search.results = results;
             app.search.flat = flat;
+            app.search.rows = rows;
+            // Hand the keyboard to the results so Enter/j/k work right away.
+            if !app.search.flat.is_empty() {
+                app.search.focus = crate::app::SearchFocus::Results;
+            }
         }
         Err(e) => app.status.flash(format!("search: {}", e.0), crate::app::StatusKind::Err),
     }
