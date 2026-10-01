@@ -71,6 +71,26 @@ impl SearchHit {
     }
 }
 
+impl SearchHit {
+    /// URI whose track list the detail panel shows: the album itself, or the
+    /// album of a track. Artists have none.
+    pub fn detail_key(&self) -> Option<String> {
+        let uri = match self {
+            SearchHit::Album(a) => a.uri.clone(),
+            SearchHit::Track(t) => t.album.as_ref().and_then(|a| a.uri.clone()),
+            SearchHit::Artist(_) => None,
+        };
+        uri.filter(|u| !u.is_empty())
+    }
+
+    /// URI to ask `library.get_images` for the cover shown in the detail
+    /// panel: the album's, falling back to the item's own.
+    pub fn cover_key(&self) -> Option<String> {
+        self.detail_key()
+            .or_else(|| Some(self.uri().to_string()).filter(|u| !u.is_empty()))
+    }
+}
+
 /// One line of the results panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SearchRow {
@@ -208,5 +228,25 @@ mod tests {
         let (_, rows) = group_hits(vec![track("spotify:track:1"), track("local:track:1")]);
         assert!(matches!(rows[0], SearchRow::Source { label: "LOCAL", .. }));
         assert!(rows.iter().any(|r| matches!(r, SearchRow::Source { label: "OTHER", .. })));
+    }
+
+    #[test]
+    fn detail_and_cover_keys() {
+        let t = SearchHit::Track(Track {
+            uri: "tidal:track:1:2:3".into(),
+            album: Some(Album { uri: Some("tidal:album:2".into()), ..Default::default() }),
+            ..Default::default()
+        });
+        assert_eq!(t.detail_key().as_deref(), Some("tidal:album:2"));
+        assert_eq!(t.cover_key().as_deref(), Some("tidal:album:2"));
+        // A track without an album still has a cover lookup, but no track list.
+        let orphan = track("local:track:x");
+        assert_eq!(orphan.detail_key(), None);
+        assert_eq!(orphan.cover_key().as_deref(), Some("local:track:x"));
+        // Artists: cover by their own URI, no track list.
+        let a = artist("tidal:artist:9");
+        assert_eq!(a.detail_key(), None);
+        assert_eq!(a.cover_key().as_deref(), Some("tidal:artist:9"));
+        assert_eq!(album("tidal:album:1").detail_key().as_deref(), Some("tidal:album:1"));
     }
 }

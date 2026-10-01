@@ -483,6 +483,25 @@ fn search_focus_order(show_filters: bool) -> Vec<SearchFocus> {
     order
 }
 
+/// Move the focus from the results into the detail panel's track list (only
+/// when there is a loaded, non-empty one). A highlighted track starts on its
+/// own row in the album's list.
+fn enter_search_detail(app: &mut App) {
+    let hit_uri = match app.search.selected_hit() {
+        Some(crate::app::SearchHit::Track(t)) => Some(t.uri.clone()),
+        _ => None,
+    };
+    let Some(tracks) = app.search.detail_tracks() else { return };
+    if tracks.is_empty() {
+        return;
+    }
+    let start = hit_uri
+        .and_then(|u| tracks.iter().position(|t| t.uri == u))
+        .unwrap_or(0);
+    app.search.detail_state.select(Some(start));
+    app.search.focus = SearchFocus::Detail;
+}
+
 fn toggle_search_filters(app: &mut App) {
     app.search.show_filters = !app.search.show_filters;
     if !app.search.show_filters {
@@ -496,7 +515,8 @@ fn toggle_search_filters(app: &mut App) {
 
 fn move_focus(app: &mut App, delta: i32) {
     let order = search_focus_order(app.search.show_filters);
-    let cur = order.iter().position(|x| *x == app.search.focus).unwrap_or(0) as i32;
+    let at = if app.search.focus == SearchFocus::Detail { SearchFocus::Results } else { app.search.focus };
+    let cur = order.iter().position(|x| *x == at).unwrap_or(0) as i32;
     let next = (cur + delta).clamp(0, order.len() as i32 - 1) as usize;
     let target = order[next];
     // Don't jump into Results when there are none — feels broken.
@@ -562,6 +582,42 @@ fn handle_search(app: &mut App, key: KeyEvent) -> Cmd {
             }
             _ => Cmd::None,
         },
+        SearchFocus::Detail => {
+            let len = app.search.detail_tracks().map_or(0, |t| t.len());
+            let cur = app.search.detail_state.selected().unwrap_or(0);
+            let go = |app: &mut App, to: usize| {
+                app.search.detail_state.select(Some(to.min(len.saturating_sub(1))));
+            };
+            match key.code {
+                KeyCode::Left | KeyCode::Char('h') | KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab => {
+                    app.search.focus = SearchFocus::Results;
+                    Cmd::None
+                }
+                KeyCode::Down | KeyCode::Char('j') => { go(app, cur + 1); Cmd::None }
+                KeyCode::Up | KeyCode::Char('k') => { go(app, cur.saturating_sub(1)); Cmd::None }
+                KeyCode::PageDown => { go(app, cur + 10); Cmd::None }
+                KeyCode::PageUp => { go(app, cur.saturating_sub(10)); Cmd::None }
+                KeyCode::Home => { go(app, 0); Cmd::None }
+                KeyCode::End => { go(app, len.saturating_sub(1)); Cmd::None }
+                KeyCode::Enter | KeyCode::Char('a') | KeyCode::Char('p') => app
+                    .search
+                    .selected_detail_track()
+                    .map(|t| Cmd::Add(vec![t.uri.clone()]))
+                    .unwrap_or(Cmd::None),
+                KeyCode::Char('o') => app
+                    .search
+                    .selected_detail_track()
+                    .map(|t| Cmd::StartRadio(t.uri.clone()))
+                    .unwrap_or(Cmd::None),
+                KeyCode::Char('f') => app
+                    .search
+                    .selected_hit()
+                    .and_then(|h| h.detail_key())
+                    .map(Cmd::ToggleFavoriteAlbum)
+                    .unwrap_or(Cmd::None),
+                _ => Cmd::None,
+            }
+        }
         SearchFocus::SearchBtn => match key.code {
             KeyCode::Up => { move_focus(app, -1); Cmd::None }
             KeyCode::Down | KeyCode::Tab => { move_focus(app, 1); Cmd::None }
@@ -614,7 +670,10 @@ fn handle_search(app: &mut App, key: KeyEvent) -> Cmd {
                     Cmd::None
                 }
                 KeyCode::BackTab => { move_focus(app, -1); Cmd::None }
-                KeyCode::Tab => { move_focus(app, 1); Cmd::None }
+                KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+                    enter_search_detail(app);
+                    Cmd::None
+                }
                 KeyCode::Enter => match app.search.selected_hit() {
                     Some(SearchHit::Track(t)) => Cmd::Add(vec![t.uri.clone()]),
                     Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::OpenAlbum).unwrap_or(Cmd::None),

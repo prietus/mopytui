@@ -185,6 +185,8 @@ pub enum SearchFocus {
     SearchBtn,
     ResetBtn,
     Results,
+    /// The track list of the detail panel (next to the results).
+    Detail,
 }
 
 impl Default for SearchFocus {
@@ -232,6 +234,20 @@ pub struct SearchState {
     /// Selection over `rows` (always a hit row).
     pub state: ListState,
     pub last_query: Option<String>,
+    /// Track lists of albums shown in the detail panel, by album URI. An
+    /// empty list means "looked up, nothing found" (so we don't retry).
+    pub detail_cache: HashMap<String, Vec<Track>>,
+    /// Selected track in the detail panel's list (when it has the focus).
+    pub detail_state: ListState,
+    /// Album URIs with a lookup in flight.
+    pub detail_requested: std::collections::HashSet<String>,
+    /// Finished lookups, handed from the background tasks to the UI thread.
+    pub detail_slot: Arc<std::sync::Mutex<SearchDetailSlot>>,
+}
+
+#[derive(Default)]
+pub struct SearchDetailSlot {
+    pub done: Vec<(String, Vec<Track>)>,
 }
 
 impl SearchState {
@@ -249,10 +265,22 @@ impl SearchState {
         match crate::search::next_hit_row(&self.rows, self.state.selected(), delta) {
             Some(i) => {
                 self.state.select(Some(i));
+                // A different result has a different track list.
+                self.detail_state = ListState::default();
                 true
             }
             None => false,
         }
+    }
+
+    /// Track list shown in the detail panel for the highlighted result, once loaded.
+    pub fn detail_tracks(&self) -> Option<&Vec<Track>> {
+        self.detail_cache.get(&self.selected_hit()?.detail_key()?)
+    }
+
+    /// The track highlighted in the detail panel's list.
+    pub fn selected_detail_track(&self) -> Option<&Track> {
+        self.detail_tracks()?.get(self.detail_state.selected()?)
     }
 }
 
@@ -689,6 +717,50 @@ impl App {
         self.status.maybe_clear();
         self.poll_lyrics_cache();
         self.poll_meta_slot();
+        self.poll_search_detail();
+    }
+
+    /// Keep the Search detail panel fed: adopt finished album lookups, and
+    /// (when the highlighted result changed) start the cover and track-list
+    /// fetches for it. Called per tick, which also throttles fast scrolling.
+    pub fn poll_search_detail(&mut self) {
+        if self.view != View::Search { return; }
+        let finished: Vec<_> = self.search.detail_slot.lock().unwrap().done.drain(..).collect();
+        for (key, tracks) in finished {
+            self.search.detail_requested.remove(&key);
+            self.search.detail_cache.insert(key, tracks);
+        }
+        let Some(hit) = self.search.selected_hit() else { return };
+        let (cover, detail) = (hit.cover_key(), hit.detail_key());
+        if let Some(uri) = cover
+            && !self.images.contains(&uri)
+            && !self.albums.cover_requested.contains(&uri)
+        {
+            let card = AlbumCard {
+                source: AlbumSource::from_uri(&uri),
+                uri,
+                name: String::new(),
+                artist: String::new(),
+                year: None,
+            };
+            crate::cmd::schedule_album_cover(self, &card);
+        }
+        if let Some(key) = detail
+            && !self.search.detail_cache.contains_key(&key)
+            && self.search.detail_requested.insert(key.clone())
+        {
+            let client = self.client.clone();
+            let slot = self.search.detail_slot.clone();
+            tokio::spawn(async move {
+                let tracks = client
+                    .lookup(vec![key.clone()])
+                    .await
+                    .ok()
+                    .and_then(|mut m| m.remove(&key))
+                    .unwrap_or_default();
+                slot.lock().unwrap().done.push((key, tracks));
+            });
+        }
     }
 
     /// If a lyrics fetch was scheduled for the current track, check whether

@@ -74,7 +74,8 @@ const ROWS: &[(&str, &str)] = &[
     ("Tab", "query → Local/Tidal → results"),
     ("Space", "toggle the focused Local/Tidal source"),
     ("j/k ↑/↓", "move over results (grouped by TIDAL / LOCAL, then albums · artists · tracks)"),
-    ("Enter", "play/open the result"),
+    ("→ l Tab", "move into the detail's track list (← h Esc to go back)"),
+    ("Enter", "play/open the result · add the highlighted track (in the track list)"),
     ("p / a / o / f", "play · queue · radio · add to library (on result)"),
 ];
 

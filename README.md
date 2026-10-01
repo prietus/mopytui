@@ -171,6 +171,7 @@ mpris = false       # Linux only
 |           | `Esc`              | Leave edit mode                         |
 |           | `Enter` (results)  | Add track · open album · browse artist  |
 |           | `j` / `k`          | Move over results (grouped by Tidal / Local and by albums · artists · tracks) |
+|           | `→` / `l` / `Tab`  | Move into the detail's track list (`←` / `h` / `Esc` back); `Enter` adds the track |
 |           | `p` (album row)    | Play album                              |
 |           | `a` (album row)    | Queue album                             |
 |           | `f` (album / track row) | Add / remove the album to / from your Tidal library |
