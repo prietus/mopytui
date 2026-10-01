@@ -332,6 +332,50 @@ pub struct GoodiesState {
     pub totals: Option<serde_json::Value>,
     /// Tidal album IDs the user has favorited via goodies.
     pub favorites: std::collections::HashSet<String>,
+    /// Time window applied to every stats tab except Recent.
+    pub period: GoodiesPeriod,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GoodiesPeriod {
+    #[default]
+    All,
+    Week,
+    Month,
+    Year,
+}
+
+impl GoodiesPeriod {
+    pub fn label(self) -> &'static str {
+        match self {
+            GoodiesPeriod::All => "All time",
+            GoodiesPeriod::Week => "Week",
+            GoodiesPeriod::Month => "Month",
+            GoodiesPeriod::Year => "Year",
+        }
+    }
+    pub fn next(self) -> Self {
+        match self {
+            GoodiesPeriod::All => GoodiesPeriod::Week,
+            GoodiesPeriod::Week => GoodiesPeriod::Month,
+            GoodiesPeriod::Month => GoodiesPeriod::Year,
+            GoodiesPeriod::Year => GoodiesPeriod::All,
+        }
+    }
+    /// Unix timestamp for the `since=` query argument; `None` means no filter.
+    pub fn since(self) -> Option<i64> {
+        let days: i64 = match self {
+            GoodiesPeriod::All => return None,
+            GoodiesPeriod::Week => 7,
+            GoodiesPeriod::Month => 30,
+            GoodiesPeriod::Year => 365,
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()?
+            .as_secs() as i64;
+        Some(now - days * 86_400)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -341,6 +385,7 @@ pub enum GoodiesTab {
     MostPlayed,
     TopArtists,
     TopAlbums,
+    Labels,
     Heatmap,
     Genres,
     Totals,
@@ -353,6 +398,7 @@ impl GoodiesTab {
             GoodiesTab::MostPlayed => "Most Played",
             GoodiesTab::TopArtists => "Top Artists",
             GoodiesTab::TopAlbums => "Top Albums",
+            GoodiesTab::Labels => "Labels",
             GoodiesTab::Heatmap => "When",
             GoodiesTab::Genres => "Genres",
             GoodiesTab::Totals => "Totals",
@@ -363,7 +409,8 @@ impl GoodiesTab {
             GoodiesTab::Recent => GoodiesTab::MostPlayed,
             GoodiesTab::MostPlayed => GoodiesTab::TopArtists,
             GoodiesTab::TopArtists => GoodiesTab::TopAlbums,
-            GoodiesTab::TopAlbums => GoodiesTab::Heatmap,
+            GoodiesTab::TopAlbums => GoodiesTab::Labels,
+            GoodiesTab::Labels => GoodiesTab::Heatmap,
             GoodiesTab::Heatmap => GoodiesTab::Genres,
             GoodiesTab::Genres => GoodiesTab::Totals,
             GoodiesTab::Totals => GoodiesTab::Recent,
@@ -375,7 +422,8 @@ impl GoodiesTab {
             GoodiesTab::MostPlayed => GoodiesTab::Recent,
             GoodiesTab::TopArtists => GoodiesTab::MostPlayed,
             GoodiesTab::TopAlbums => GoodiesTab::TopArtists,
-            GoodiesTab::Heatmap => GoodiesTab::TopAlbums,
+            GoodiesTab::Heatmap => GoodiesTab::Labels,
+            GoodiesTab::Labels => GoodiesTab::TopAlbums,
             GoodiesTab::Genres => GoodiesTab::Heatmap,
             GoodiesTab::Totals => GoodiesTab::Genres,
         }

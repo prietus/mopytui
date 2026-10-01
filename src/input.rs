@@ -710,18 +710,27 @@ fn handle_goodies(app: &mut App, key: KeyEvent) -> Cmd {
             let Some(i) = app.goodies.state.selected() else { return Cmd::None };
             let items = match app.goodies.tab {
                 GoodiesTab::Recent => &app.goodies.recent,
-                GoodiesTab::MostPlayed | GoodiesTab::TopArtists | GoodiesTab::TopAlbums => {
+                GoodiesTab::MostPlayed | GoodiesTab::TopArtists | GoodiesTab::TopAlbums | GoodiesTab::Labels => {
                     &app.goodies.most
                 }
                 _ => return Cmd::None,
             };
-            items.get(i).map(|it| Cmd::Add(vec![it.uri.clone()])).unwrap_or(Cmd::None)
+            items
+                .get(i)
+                .filter(|it| !it.uri.is_empty())
+                .map(|it| Cmd::Add(vec![it.uri.clone()]))
+                .unwrap_or(Cmd::None)
+        }
+        KeyCode::Char('p') => {
+            app.goodies.period = app.goodies.period.next();
+            app.goodies.state.select(None);
+            Cmd::LoadGoodies
         }
         KeyCode::Char('f') => {
             let Some(i) = app.goodies.state.selected() else { return Cmd::None };
             let items = match app.goodies.tab {
                 GoodiesTab::Recent => &app.goodies.recent,
-                GoodiesTab::MostPlayed | GoodiesTab::TopArtists | GoodiesTab::TopAlbums => {
+                GoodiesTab::MostPlayed | GoodiesTab::TopArtists | GoodiesTab::TopAlbums | GoodiesTab::Labels => {
                     &app.goodies.most
                 }
                 _ => return Cmd::None,
@@ -731,7 +740,7 @@ fn handle_goodies(app: &mut App, key: KeyEvent) -> Cmd {
         KeyCode::Down | KeyCode::Char('j') => {
             let items = match app.goodies.tab {
                 GoodiesTab::Recent => &app.goodies.recent,
-                GoodiesTab::MostPlayed | GoodiesTab::TopArtists | GoodiesTab::TopAlbums => {
+                GoodiesTab::MostPlayed | GoodiesTab::TopArtists | GoodiesTab::TopAlbums | GoodiesTab::Labels => {
                     &app.goodies.most
                 }
                 _ => return Cmd::None,

@@ -47,7 +47,7 @@ pub fn render(f: &mut Frame, app: &mut App, area: Rect) {
 
     match app.goodies.tab {
         GoodiesTab::Recent | GoodiesTab::MostPlayed => render_list(f, app, rows[1]),
-        GoodiesTab::TopArtists | GoodiesTab::TopAlbums => render_bars_list(f, app, rows[1]),
+        GoodiesTab::TopArtists | GoodiesTab::TopAlbums | GoodiesTab::Labels => render_bars_list(f, app, rows[1]),
         GoodiesTab::Heatmap => render_heatmap(f, app, rows[1]),
         GoodiesTab::Genres => render_genres(f, app, rows[1]),
         GoodiesTab::Totals => render_totals(f, app, rows[1]),
@@ -60,6 +60,7 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
         GoodiesTab::MostPlayed,
         GoodiesTab::TopArtists,
         GoodiesTab::TopAlbums,
+        GoodiesTab::Labels,
         GoodiesTab::Heatmap,
         GoodiesTab::Genres,
         GoodiesTab::Totals,
@@ -77,6 +78,13 @@ fn render_tabs(f: &mut Frame, app: &App, area: Rect) {
         };
         spans.push(Span::raw(" "));
         spans.push(Span::styled(format!(" {} ", t.label()), style));
+    }
+    if app.goodies.tab != GoodiesTab::Recent {
+        spans.push(Span::raw("  "));
+        spans.push(Span::styled(
+            format!("[p] {}", app.goodies.period.label()),
+            Style::default().fg(app.theme.accent),
+        ));
     }
     f.render_widget(Paragraph::new(Line::from(spans)), area);
 }

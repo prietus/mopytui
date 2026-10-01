@@ -471,37 +471,28 @@ impl Client {
         Ok(self.inner.get(url).send().await?.error_for_status()?.json().await?)
     }
 
-    pub async fn goodies_stats_by_day_of_week(&self) -> Result<Value> {
-        Ok(self
-            .inner
-            .get(self.goodies_url("/stats/by-day-of-week"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?)
+    pub async fn goodies_stats_top_labels(&self, limit: u32, since: Option<i64>) -> Result<Value> {
+        let mut url = format!("{}?limit={limit}", self.goodies_url("/stats/top-labels"));
+        if let Some(s) = since { url.push_str(&format!("&since={s}")); }
+        Ok(self.inner.get(url).send().await?.error_for_status()?.json().await?)
     }
 
-    pub async fn goodies_stats_by_hour(&self) -> Result<Value> {
-        Ok(self
-            .inner
-            .get(self.goodies_url("/stats/by-hour"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?)
+    pub async fn goodies_stats_by_day_of_week(&self, since: Option<i64>) -> Result<Value> {
+        let mut url = self.goodies_url("/stats/by-day-of-week");
+        if let Some(s) = since { url.push_str(&format!("?since={s}")); }
+        Ok(self.inner.get(url).send().await?.error_for_status()?.json().await?)
     }
 
-    pub async fn goodies_stats_totals(&self) -> Result<Value> {
-        Ok(self
-            .inner
-            .get(self.goodies_url("/stats/totals"))
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?)
+    pub async fn goodies_stats_by_hour(&self, since: Option<i64>) -> Result<Value> {
+        let mut url = self.goodies_url("/stats/by-hour");
+        if let Some(s) = since { url.push_str(&format!("?since={s}")); }
+        Ok(self.inner.get(url).send().await?.error_for_status()?.json().await?)
+    }
+
+    pub async fn goodies_stats_totals(&self, since: Option<i64>) -> Result<Value> {
+        let mut url = self.goodies_url("/stats/totals");
+        if let Some(s) = since { url.push_str(&format!("?since={s}")); }
+        Ok(self.inner.get(url).send().await?.error_for_status()?.json().await?)
     }
 
     /// Live snapshot of mopidy's audio sink. Requires `tidal_goodies >= 0.4.0`

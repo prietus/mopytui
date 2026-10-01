@@ -65,8 +65,9 @@ halfblocks** — detected at runtime.
 - **Audio chip** — live sample rate / bit depth / channels from
   `mopidy-mpd`'s `status:audio` (bit-perfect verification).
 - **Tidal Goodies** stats (recently played, most played, top artists/albums,
-  listening heatmap, genres, totals) when the server has
-  [`mopidy-tidal-goodies`](https://github.com/yaragon/mopidy-tidal-goodies)
+  record labels, listening heatmap, genres, totals — filterable by week /
+  month / year) when the server
+  has [`mopidy-tidal-goodies`](https://github.com/yaragon/mopidy-tidal-goodies)
   installed.
 - Live updates via `mpd` `idle` subscription (player/mixer/options/playlist).
 
@@ -173,6 +174,8 @@ mpris = false       # Linux only
 |           | `J` / `K`          | Move down / up                          |
 |           | `X`                | Clear                                   |
 |           | `Z`                | Shuffle                                 |
+| Stats     | `h` / `l`          | Previous / next tab                     |
+|           | `p`                | Cycle period: all time · week · month · year |
 | Playlists | `Enter` (list)     | Open playlist                           |
 |           | `Enter` (tracks)   | Add track to queue                      |
 |           | `a` (list)         | Add whole playlist to queue             |

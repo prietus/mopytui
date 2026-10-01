@@ -961,39 +961,44 @@ pub async fn load_goodies(app: &mut App) {
     use crate::app::GoodiesTab;
     check_goodies(app).await;
     if !app.goodies.available { return; }
+    let since = app.goodies.period.since();
     match app.goodies.tab {
         GoodiesTab::Recent => {
             let v = app.client.goodies_stats_recent(100).await.unwrap_or_default();
             app.goodies.recent = parse_goodies(&v);
         }
         GoodiesTab::MostPlayed => {
-            let v = app.client.goodies_stats_most_played(100, None).await.unwrap_or_default();
+            let v = app.client.goodies_stats_most_played(100, since).await.unwrap_or_default();
             app.goodies.most = parse_goodies(&v);
         }
         GoodiesTab::TopArtists => {
-            let v = app.client.goodies_stats_top_artists(100, None).await.unwrap_or_default();
+            let v = app.client.goodies_stats_top_artists(100, since).await.unwrap_or_default();
             app.goodies.most = parse_goodies(&v);
         }
         GoodiesTab::TopAlbums => {
-            let v = app.client.goodies_stats_top_albums(100, None).await.unwrap_or_default();
+            let v = app.client.goodies_stats_top_albums(100, since).await.unwrap_or_default();
+            app.goodies.most = parse_goodies(&v);
+        }
+        GoodiesTab::Labels => {
+            let v = app.client.goodies_stats_top_labels(100, since).await.unwrap_or_default();
             app.goodies.most = parse_goodies(&v);
         }
         GoodiesTab::Heatmap => {
             let (h, d) = tokio::join!(
-                app.client.goodies_stats_by_hour(),
-                app.client.goodies_stats_by_day_of_week(),
+                app.client.goodies_stats_by_hour(since),
+                app.client.goodies_stats_by_day_of_week(since),
             );
             app.goodies.heatmap_hours = parse_buckets(h.unwrap_or_default(), 24, "hour");
             app.goodies.heatmap_dow = parse_buckets(d.unwrap_or_default(), 7, "day_of_week");
         }
         GoodiesTab::Genres => {
-            let v = app.client.goodies_stats_by_genre(50, None).await.unwrap_or_default();
+            let v = app.client.goodies_stats_by_genre(50, since).await.unwrap_or_default();
             app.goodies.genres = parse_genres(&v);
         }
         GoodiesTab::Totals => {
             let (t, h) = tokio::join!(
-                app.client.goodies_stats_totals(),
-                app.client.goodies_stats_by_hour(),
+                app.client.goodies_stats_totals(since),
+                app.client.goodies_stats_by_hour(since),
             );
             app.goodies.totals = t.ok();
             app.goodies.heatmap_hours = parse_buckets(h.unwrap_or_default(), 24, "hour");
@@ -1002,7 +1007,7 @@ pub async fn load_goodies(app: &mut App) {
     if app.goodies.state.selected().is_none() {
         let has = match app.goodies.tab {
             GoodiesTab::Recent => !app.goodies.recent.is_empty(),
-            GoodiesTab::MostPlayed | GoodiesTab::TopArtists | GoodiesTab::TopAlbums => {
+            GoodiesTab::MostPlayed | GoodiesTab::TopArtists | GoodiesTab::TopAlbums | GoodiesTab::Labels => {
                 !app.goodies.most.is_empty()
             }
             _ => false,
@@ -1142,7 +1147,7 @@ fn parse_goodies(v: &serde_json::Value) -> Vec<crate::app::GoodiesItem> {
             // Track which field gave us the title so we can avoid using it
             // again for the subtitle (otherwise endpoints that key by artist
             // end up showing "Artist · Artist").
-            let (title, title_src) = ["title", "name", "track", "track_name", "album", "artist"]
+            let (title, title_src) = ["title", "name", "track", "track_name", "album", "artist", "label"]
                 .iter()
                 .find_map(|k| {
                     x.get(*k)
