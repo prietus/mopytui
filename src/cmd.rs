@@ -109,6 +109,7 @@ pub async fn apply(app: &mut App, cmd: Cmd) -> Result<()> {
         Cmd::LoadGoodies => load_goodies(app).await,
         Cmd::FetchCover(uri) => fetch_cover_async(app, uri),
         Cmd::ToggleFavoriteAlbum(uri) => toggle_favorite_album(app, uri).await,
+        Cmd::StartRadio(uri) => start_radio(app, uri).await,
         Cmd::LoadAlbums => load_albums(app).await,
         Cmd::OpenAlbumDetail(uri) => open_album_detail(app, uri).await,
         Cmd::BackToAlbumsGrid => {
@@ -1014,6 +1015,89 @@ pub async fn load_goodies(app: &mut App) {
         };
         if has { app.goodies.state.select(Some(0)); }
     }
+}
+
+/// Title without "(Remastered)", "[Live]" or " - Radio Edit" suffixes, for
+/// comparing a local track with Tidal's copy of it.
+fn clean_title(t: &str) -> String {
+    let cut = t.find(['(', '[']).map(|i| &t[..i]).unwrap_or(t);
+    let cut = cut.find(" - ").map(|i| &cut[..i]).unwrap_or(cut);
+    let cut = cut.trim();
+    if cut.is_empty() { t.trim().to_lowercase() } else { cut.to_lowercase() }
+}
+
+/// Replace the queue with a Tidal radio seeded from `uri` (track or artist)
+/// via goodies and start playing. A local seed track plays first from the
+/// user's own copy instead of Tidal's.
+pub async fn start_radio(app: &mut App, uri: String) {
+    if !app.goodies.available {
+        app.status.flash("radio needs the goodies plugin", crate::app::StatusKind::Warn);
+        return;
+    }
+    app.status.flash("building radio…", crate::app::StatusKind::Info);
+    let radio = match app.client.goodies_radio(&uri, 100).await {
+        Ok(Some(r)) if !r.tracks.is_empty() => r,
+        Ok(_) => {
+            app.status.flash("no radio available for this item", crate::app::StatusKind::Warn);
+            return;
+        }
+        Err(e) => {
+            app.status.flash(format!("radio: {}", e.0), crate::app::StatusKind::Err);
+            return;
+        }
+    };
+    let mut uris: Vec<String> = radio.tracks.iter().map(|(u, _)| u.clone()).collect();
+    if uri.starts_with("local:track:") {
+        // Tidal's radio starts with its own copy of the seed: swap in the local file.
+        if let (Some((_, first)), Some(seed)) = (radio.tracks.first(), radio.seed_title.as_deref())
+            && clean_title(first) == clean_title(seed)
+        {
+            uris.remove(0);
+        }
+        uris.insert(0, uri.clone());
+    }
+
+    // Adding ~100 Tidal tracks at once can block Mopidy for tens of seconds
+    // (mopidy-tidal looks up each track's album) and freeze this UI with it.
+    // Replace the queue with a first batch, start playing, and fill in the
+    // rest in the background, a batch at a time.
+    const BATCH: usize = 10;
+    if let Some(h) = app.radio_fill.take() {
+        h.abort();
+    }
+    log_err(app, "clear", app.client.tracklist_clear().await);
+    let total = uris.len();
+    let (first, rest) = uris.split_at(BATCH.min(total));
+    match app.client.tracklist_add(first.to_vec(), None).await {
+        Ok(added) => {
+            let (good, _) = drop_unresolved(app, added).await;
+            if let Some(t) = good.first() {
+                log_err(app, "play", app.client.playback_play(Some(t.tlid)).await);
+            }
+        }
+        Err(e) => {
+            app.status.flash(format!("radio: {}", e.0), crate::app::StatusKind::Err);
+            return;
+        }
+    }
+    if !rest.is_empty() {
+        let client = app.client.clone();
+        let rest: Vec<String> = rest.to_vec();
+        app.radio_fill = Some(tokio::spawn(async move {
+            for chunk in rest.chunks(BATCH) {
+                if let Err(e) = client.tracklist_add(chunk.to_vec(), None).await {
+                    tracing::warn!("radio fill: {}", e.0);
+                    break;
+                }
+            }
+        }));
+    }
+    refresh_queue(app).await;
+    refresh_playback(app).await;
+    app.status.flash(
+        format!("radio: {total} tracks (filling in the background)"),
+        crate::app::StatusKind::Ok,
+    );
 }
 
 pub async fn load_favorites(app: &mut App) {

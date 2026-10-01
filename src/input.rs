@@ -116,6 +116,11 @@ fn handle_albums_detail(app: &mut App, key: KeyEvent) -> Cmd {
         KeyCode::Char('p') => Cmd::PlayAlbum(detail.card.uri.clone()),
         KeyCode::Char('a') => Cmd::QueueAlbum(detail.card.uri.clone()),
         KeyCode::Char('f') => Cmd::ToggleFavoriteAlbum(detail.card.uri.clone()),
+        KeyCode::Char('o') => detail
+            .tracks
+            .get(detail.track_index)
+            .map(|t| Cmd::StartRadio(t.uri.clone()))
+            .unwrap_or(Cmd::None),
         KeyCode::Down | KeyCode::Char('j') => {
             if len > 0 && detail.track_index + 1 < len { detail.track_index += 1; }
             Cmd::None
@@ -285,6 +290,18 @@ fn handle_library(app: &mut App, key: KeyEvent) -> Cmd {
             }
             Cmd::None
         }
+        KeyCode::Char('o') => {
+            let uri = match app.library.focus {
+                LibraryFocus::Entries => app.library.entries_state.selected()
+                    .and_then(|i| app.library.entries.get(i))
+                    .filter(|e| matches!(e.kind.as_str(), "track" | "artist"))
+                    .map(|e| e.uri.clone()),
+                LibraryFocus::Tracks => app.library.album_tracks.as_ref()
+                    .and_then(|v| v.get(app.library.album_tracks_state.selected().unwrap_or(0)))
+                    .map(|t| t.uri.clone()),
+            };
+            uri.map(Cmd::StartRadio).unwrap_or(Cmd::None)
+        }
         KeyCode::Char('r') if key.modifiers.is_empty() => {
             let uri = app.library.entries
                 .get(app.library.entries_state.selected().unwrap_or(0))
@@ -404,6 +421,10 @@ fn handle_queue(app: &mut App, key: KeyEvent) -> Cmd {
             let Some(i) = app.queue_state.table.selected() else { return Cmd::None };
             if i == 0 { return Cmd::None }
             Cmd::MoveQueue { start: i as u32, end: i as u32 + 1, to: i as u32 - 1 }
+        }
+        KeyCode::Char('o') => {
+            let Some(i) = app.queue_state.table.selected() else { return Cmd::None };
+            app.queue.get(i).map(|t| Cmd::StartRadio(t.track.uri.clone())).unwrap_or(Cmd::None)
         }
         KeyCode::Char('X') => Cmd::ClearQueue,
         KeyCode::Char('Z') => Cmd::ShuffleQueue,
@@ -568,6 +589,14 @@ fn handle_search(app: &mut App, key: KeyEvent) -> Cmd {
                         _ => Cmd::None,
                     }
                 }
+                KeyCode::Char('o') => {
+                    let Some(i) = app.search.state.selected() else { return Cmd::None };
+                    match app.search.flat.get(i) {
+                        Some(SearchHit::Track(t)) => Cmd::StartRadio(t.uri.clone()),
+                        Some(SearchHit::Artist(a)) => a.uri.clone().map(Cmd::StartRadio).unwrap_or(Cmd::None),
+                        _ => Cmd::None,
+                    }
+                }
                 KeyCode::Char('p') => {
                     let Some(i) = app.search.state.selected() else { return Cmd::None };
                     match app.search.flat.get(i) {
@@ -679,6 +708,12 @@ fn handle_now_playing(app: &App, key: KeyEvent) -> Cmd {
     match key.code {
         KeyCode::Char(' ') => Cmd::TogglePlayPause,
         KeyCode::Char('s') => Cmd::Stop,
+        KeyCode::Char('o') => app
+            .playback
+            .current
+            .as_ref()
+            .map(|t| Cmd::StartRadio(t.uri.clone()))
+            .unwrap_or(Cmd::None),
         KeyCode::Char('f') => {
             // Favorite the album of the currently playing track.
             app.playback
@@ -725,6 +760,21 @@ fn handle_goodies(app: &mut App, key: KeyEvent) -> Cmd {
             app.goodies.period = app.goodies.period.next();
             app.goodies.state.select(None);
             Cmd::LoadGoodies
+        }
+        KeyCode::Char('o') => {
+            let Some(i) = app.goodies.state.selected() else { return Cmd::None };
+            let items = match app.goodies.tab {
+                GoodiesTab::Recent => &app.goodies.recent,
+                GoodiesTab::MostPlayed | GoodiesTab::TopArtists | GoodiesTab::TopAlbums => {
+                    &app.goodies.most
+                }
+                _ => return Cmd::None,
+            };
+            items
+                .get(i)
+                .filter(|it| it.uri.starts_with("tidal:track:") || it.uri.contains(":artist:") || it.uri.contains(":track:"))
+                .map(|it| Cmd::StartRadio(it.uri.clone()))
+                .unwrap_or(Cmd::None)
         }
         KeyCode::Char('f') => {
             let Some(i) = app.goodies.state.selected() else { return Cmd::None };

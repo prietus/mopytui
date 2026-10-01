@@ -524,6 +524,9 @@ pub struct App {
 
     pub metadata: Arc<MetadataState>,
     pub meta_slot: Arc<std::sync::Mutex<MetaSlot>>,
+    /// Background task filling the queue with the rest of a radio; aborted
+    /// when a new radio starts so its tracks don't land in the new queue.
+    pub radio_fill: Option<tokio::task::JoinHandle<()>>,
     pub meta_key: Option<String>,
     pub current_album_meta: Option<AlbumMeta>,
     pub current_artist_meta: Option<ArtistMeta>,
@@ -586,6 +589,7 @@ impl App {
             show_lyrics: true,
             metadata: Arc::new(MetadataState::new()),
             meta_slot: Arc::new(std::sync::Mutex::new(MetaSlot::default())),
+            radio_fill: None,
             meta_key: None,
             current_album_meta: None,
             current_artist_meta: None,
@@ -718,6 +722,8 @@ pub enum Cmd {
     LoadGoodies,
     FetchCover(String),
     ToggleFavoriteAlbum(String),
+    /// Queue a Tidal radio seeded from a track or artist URI (goodies).
+    StartRadio(String),
     LoadAlbums,
     OpenAlbumDetail(String),
     BackToAlbumsGrid,

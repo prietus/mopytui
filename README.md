@@ -66,7 +66,7 @@ halfblocks** — detected at runtime.
   `mopidy-mpd`'s `status:audio` (bit-perfect verification).
 - **Tidal Goodies** stats (recently played, most played, top artists/albums,
   record labels, listening heatmap, genres, totals — filterable by week /
-  month / year) when the server
+  month / year) and **Tidal radio** (`o` on any track or artist) when the server
   has [`mopidy-tidal-goodies`](https://github.com/yaragon/mopidy-tidal-goodies)
   installed.
 - Live updates via `mpd` `idle` subscription (player/mixer/options/playlist).
@@ -146,6 +146,7 @@ mpris = false       # Linux only
 |           | `-` / `+` / `=`    | Volume −/+ 5                            |
 |           | `m`                | Toggle mute                             |
 |           | `R` `T` `S` `C`    | Toggle random / repeat / single / consume |
+|           | `o`                | Start Tidal radio from the selected / current track or artist, replacing the queue (needs goodies) |
 | Albums    | `↑↓←→` / `hjkl`    | Move selection in the grid              |
 |           | `PgUp` / `PgDn`    | Jump 3 rows                             |
 |           | `Enter`            | Open album detail                       |

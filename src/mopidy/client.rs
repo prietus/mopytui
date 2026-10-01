@@ -20,6 +20,13 @@ pub struct AudioActive {
     pub verdict: Option<String>,
 }
 
+/// A Tidal radio: `(uri, title)` of each track and the seed's title.
+#[derive(Debug, Clone, Default)]
+pub struct Radio {
+    pub tracks: Vec<(String, String)>,
+    pub seed_title: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct Client {
     inner: reqwest::Client,
@@ -475,6 +482,33 @@ impl Client {
         let mut url = format!("{}?limit={limit}", self.goodies_url("/stats/top-labels"));
         if let Some(s) = since { url.push_str(&format!("&since={s}")); }
         Ok(self.inner.get(url).send().await?.error_for_status()?.json().await?)
+    }
+
+    /// Tidal radio seeded from any track/artist URI. `Ok(None)` when goodies
+    /// has no radio for the seed (404).
+    pub async fn goodies_radio(&self, uri: &str, limit: u32) -> Result<Option<Radio>> {
+        let resp = self
+            .inner
+            .get(self.goodies_url("/tidal/radio"))
+            .query(&[("uri", uri), ("limit", &limit.to_string())])
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let v: Value = resp.error_for_status()?.json().await?;
+        let s = |x: &Value, k: &str| x.get(k).and_then(|u| u.as_str()).map(String::from);
+        let tracks = v
+            .get("tracks")
+            .and_then(|t| t.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| Some((s(t, "uri")?, s(t, "title").unwrap_or_default())))
+                    .collect()
+            })
+            .unwrap_or_default();
+        let seed_title = v.get("seed").and_then(|x| s(x, "title"));
+        Ok(Some(Radio { tracks, seed_title }))
     }
 
     pub async fn goodies_stats_by_day_of_week(&self, since: Option<i64>) -> Result<Value> {
