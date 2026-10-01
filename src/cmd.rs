@@ -857,9 +857,9 @@ pub async fn load_albums(app: &mut App) {
 
     let probes: Vec<Option<String>> = vec![
         Some("local:directory?type=album".into()),
+        // The only "My Albums" URI mopidy-tidal knows. Guessing other spellings
+        // makes it log an ERROR with a traceback on the server every time.
         Some("tidal:my_albums".into()),
-        Some("tidal:my-albums".into()),
-        Some("tidal:favorites:albums".into()),
         // Generic: dump the root and recurse one level for any `album` refs.
         None,
     ];
