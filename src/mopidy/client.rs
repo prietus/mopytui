@@ -18,6 +18,9 @@ pub struct AudioActive {
     pub dac_label: Option<String>,
     pub format: Option<AudioFormat>,
     pub verdict: Option<String>,
+    /// Why the verdict isn't "bit-perfect" when goodies says so
+    /// (e.g. `dsd-decoded-to-pcm`).
+    pub verdict_reason: Option<String>,
 }
 
 /// Editorial text from Tidal (album review / artist biography) as served by
@@ -726,7 +729,12 @@ impl Client {
             .and_then(|x| x.as_str())
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string());
-        Ok(Some(AudioActive { dac_label, format, verdict }))
+        let verdict_reason = v
+            .pointer("/chain/reason")
+            .and_then(|x| x.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        Ok(Some(AudioActive { dac_label, format, verdict, verdict_reason }))
     }
 }
 

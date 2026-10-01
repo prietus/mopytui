@@ -1145,6 +1145,7 @@ pub async fn refresh_audio_active(app: &mut App) {
                 app.audio = a.format;
             }
             app.audio_verdict = a.verdict;
+            app.audio_verdict_reason = a.verdict_reason;
         }
         Ok(None) => { /* older plugin without /audio/active */ }
         Err(e) => tracing::debug!("goodies audio_active: {e}"),

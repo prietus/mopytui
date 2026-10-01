@@ -501,6 +501,8 @@ pub struct App {
     pub dac_label: Option<String>,
     /// Chain verdict from `tidal_goodies`: e.g. "bit-perfect", "resampled".
     pub audio_verdict: Option<String>,
+    /// Reason goodies gives for a non-bit-perfect verdict, if any.
+    pub audio_verdict_reason: Option<String>,
     pub connected: bool,
 
     pub library: LibraryState,
@@ -582,6 +584,7 @@ impl App {
             bitrate: None,
             dac_label: None,
             audio_verdict: None,
+            audio_verdict_reason: None,
             connected: false,
             library: LibraryState::default(),
             albums: AlbumsState::default(),

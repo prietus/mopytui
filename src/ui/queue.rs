@@ -192,13 +192,24 @@ fn render_chain_box(f: &mut Frame, app: &App, area: Rect) {
         } else {
             ("⚠ ", app.theme.warn)
         };
-        lines.push(Line::from(vec![
+        let mut spans = vec![
             Span::styled(glyph, Style::default().fg(color).add_modifier(Modifier::BOLD)),
             Span::styled(
                 v.clone(),
                 Style::default().fg(color).add_modifier(Modifier::BOLD),
             ),
-        ]));
+        ];
+        if !bit_perfect && let Some(r) = &app.audio_verdict_reason {
+            let why = match r.as_str() {
+                "dsd-decoded-to-pcm" => "DSD → PCM",
+                other => other,
+            };
+            spans.push(Span::styled(
+                format!(" · {why}"),
+                Style::default().fg(app.theme.fg_muted),
+            ));
+        }
+        lines.push(Line::from(spans));
     }
 
     f.render_widget(Paragraph::new(lines), inner);
