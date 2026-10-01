@@ -540,6 +540,9 @@ pub struct App {
     /// The login popup was dismissed with Esc (polling continues).
     pub tidal_login_hidden: bool,
     pub tidal_login_checked: Instant,
+    /// Tidal/goodies credits of the album open in the Albums detail view,
+    /// for every track (the view shows the selected track's).
+    pub detail_credits: Option<serde_json::Value>,
     /// The login probe has run at least once since startup.
     pub tidal_login_probed_once: bool,
     /// Result of the background login probe, adopted on the next tick.
@@ -611,6 +614,7 @@ impl App {
             tidal_login: None,
             tidal_login_hidden: false,
             tidal_login_checked: Instant::now(),
+            detail_credits: None,
             tidal_login_probed_once: false,
             tidal_probe: Arc::new(std::sync::Mutex::new(TidalProbe::default())),
             meta_key: None,
@@ -687,6 +691,11 @@ impl App {
         {
             self.current_artist_meta = Some(a);
         }
+        if self.detail_credits.is_none()
+            && let Some(c) = slot.album_credits.take()
+        {
+            self.detail_credits = Some(c);
+        }
         if self.current_artist_avatar_key.is_none()
             && let Some(k) = slot.artist_avatar_key.take()
         {
@@ -710,6 +719,8 @@ pub struct MetaSlot {
     /// Cache key under which the decoded artist avatar (from fanart.tv) was
     /// stored in `App::images`. The Info view looks it up via this key.
     pub artist_avatar_key: Option<String>,
+    /// Raw goodies album-credits payload for the Albums detail view.
+    pub album_credits: Option<serde_json::Value>,
 }
 
 /// Inputs that mutate state asynchronously via the client. Returning a Cmd

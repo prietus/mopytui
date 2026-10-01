@@ -779,6 +779,9 @@ struct TidalLookup {
     review: Option<crate::mopidy::client::TidalText>,
     bio: Option<crate::mopidy::client::TidalText>,
     credits: Vec<crate::mopidy::client::TidalCredit>,
+    /// Raw per-track credits of the whole album (goodies' payload), for views
+    /// that pick the credits of whichever track is selected.
+    album_credits: Option<serde_json::Value>,
 }
 
 /// Resolve the playing track's Tidal ids and fetch goodies' album review,
@@ -803,12 +806,14 @@ async fn fetch_tidal_texts(
         .map(String::from);
     let mut credits = Vec::new();
     let mut tidal_credits_json = None;
+    let mut album_credits = None;
     if album_id.is_none()
         && let Some(u) = album_uri.filter(|u| u.starts_with("local:album:"))
         && let Ok(Some(local)) = client.goodies_local_album(u).await
     {
         if let Some(cj) = &local.credits {
             credits = track_credits(cj, &track.uri, &track.name);
+            album_credits = Some(cj.clone());
         }
         if let Some((a, ar)) = local.tidal {
             album_id = Some(a);
@@ -817,8 +822,9 @@ async fn fetch_tidal_texts(
     } else if let Some(id) = &album_id {
         tidal_credits_json = client.goodies_album_credits(id).await.ok().flatten();
     }
-    if let Some(cj) = &tidal_credits_json {
-        credits = track_credits(cj, &track.uri, &track.name);
+    if let Some(cj) = tidal_credits_json {
+        credits = track_credits(&cj, &track.uri, &track.name);
+        album_credits = Some(cj);
     }
     let review = async {
         match &album_id {
@@ -833,7 +839,7 @@ async fn fetch_tidal_texts(
         }
     };
     let (review, bio) = tokio::join!(review, bio);
-    TidalLookup { review, bio, credits }
+    TidalLookup { review, bio, credits, album_credits }
 }
 
 // ─── albums ─────────────────────────────────────────────────────────────────
@@ -986,9 +992,11 @@ pub async fn open_album_detail(app: &mut App, uri: String) {
         slot.key = Some(key.clone());
         slot.album = None;
         slot.artist = None;
+        slot.album_credits = None;
     }
     app.current_album_meta = None;
     app.current_artist_meta = None;
+    app.detail_credits = None;
     let state = app.metadata.clone();
     let slot = app.meta_slot.clone();
     let artist = detail.card.artist.clone();
@@ -1017,6 +1025,7 @@ pub async fn open_album_detail(app: &mut App, uri: String) {
         ar_meta.tidal = tidal.bio;
         let mut s = slot.lock().unwrap();
         if s.key.as_deref() == Some(key.as_str()) {
+            s.album_credits = tidal.album_credits;
             if let Some(a) = a_meta { s.album = Some(a); }
             s.artist = Some(ar_meta);
         }

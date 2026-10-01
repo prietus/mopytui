@@ -109,6 +109,22 @@ fn render_grid(f: &mut Frame, app: &mut App, area: Rect) {
     }
 }
 
+/// Shorten `text` so it wraps to at most `rows` lines of `width` columns,
+/// cutting at a word boundary and ending with an ellipsis. Wrapping loses a
+/// little at word edges, so only ~85% of the nominal capacity is used.
+fn fit_text(text: &str, rows: usize, width: usize) -> String {
+    let cap = (rows * width.max(1)) * 85 / 100;
+    if text.chars().count() <= cap {
+        return text.to_string();
+    }
+    let cut: String = text.chars().take(cap.saturating_sub(1)).collect();
+    let cut = match cut.rfind(char::is_whitespace) {
+        Some(i) => &cut[..i],
+        None => &cut,
+    };
+    format!("{}…", cut.trim_end())
+}
+
 /// Rows of text under a cover: name, artist, source chip + year.
 const CARD_TEXT_ROWS: u16 = 3;
 
@@ -517,6 +533,19 @@ fn render_detail_right(f: &mut Frame, app: &mut App, area: Rect, detail: &AlbumD
 
     // Wiki / credits block
     let mut wiki_lines: Vec<Line> = Vec::new();
+    // Tidal credits of the selected track (goodies: tags or Tidal), when known.
+    let track_credits = detail
+        .tracks
+        .get(detail.track_index)
+        .zip(app.detail_credits.as_ref())
+        .map(|(t, json)| crate::mopidy::client::track_credits(json, &t.uri, &t.name))
+        .unwrap_or_default();
+    const MAX_CREDIT_ROWS: usize = 6;
+    let shown_credits = track_credits.len().min(MAX_CREDIT_ROWS) + usize::from(track_credits.len() > MAX_CREDIT_ROWS);
+    // blank + heading + credit rows are reserved; the review gets the rest.
+    let review_rows = (rows[4].height as usize)
+        .saturating_sub(if track_credits.is_empty() { 0 } else { 2 + shown_credits } + 1)
+        .max(2);
     if let Some(meta) = &app.current_album_meta {
         if let Some(t) = &meta.tidal {
             // Tidal's editorial review (with its source) beats the Wikipedia
@@ -531,7 +560,12 @@ fn render_detail_right(f: &mut Frame, app: &mut App, area: Rect, detail: &AlbumD
                     .fg(app.theme.accent_alt)
                     .add_modifier(Modifier::BOLD),
             )));
-            for line in t.text.lines().take(8) {
+            let text = if track_credits.is_empty() {
+                t.text.clone()
+            } else {
+                fit_text(&t.text, review_rows, rows[4].width as usize)
+            };
+            for line in text.lines().take(8) {
                 wiki_lines.push(Line::from(Span::styled(
                     line.to_string(),
                     Style::default().fg(app.theme.fg),
@@ -553,6 +587,7 @@ fn render_detail_right(f: &mut Frame, app: &mut App, area: Rect, detail: &AlbumD
         }
         if let Some(rel) = &meta.release
             && !rel.credits.is_empty()
+            && track_credits.is_empty()
         {
             wiki_lines.push(Line::from(""));
             wiki_lines.push(Line::from(Span::styled(
@@ -579,6 +614,30 @@ fn render_detail_right(f: &mut Frame, app: &mut App, area: Rect, detail: &AlbumD
             "Loading MusicBrainz + Wikipedia…",
             Style::default().fg(app.theme.fg_muted),
         )));
+    }
+    if !track_credits.is_empty() {
+        let track_name = detail
+            .tracks
+            .get(detail.track_index)
+            .map(|t| t.name.clone())
+            .unwrap_or_default();
+        wiki_lines.push(Line::from(""));
+        wiki_lines.push(Line::from(vec![
+            Span::styled(
+                "Credits",
+                Style::default().fg(app.theme.accent).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(format!(" · {track_name}"), Style::default().fg(app.theme.fg_muted)),
+        ]));
+        for c in track_credits.iter().take(MAX_CREDIT_ROWS) {
+            wiki_lines.push(Line::from(vec![
+                Span::styled(format!("  {}", c.role), Style::default().fg(app.theme.fg_muted)),
+                Span::styled(format!("  {}", c.names.join(", ")), Style::default().fg(app.theme.fg)),
+            ]));
+        }
+        if track_credits.len() > MAX_CREDIT_ROWS {
+            wiki_lines.push(Line::from(Span::styled("  …", Style::default().fg(app.theme.fg_muted))));
+        }
     }
     f.render_widget(
         Paragraph::new(wiki_lines).wrap(Wrap { trim: false }),
@@ -640,7 +699,7 @@ fn render_detail_right(f: &mut Frame, app: &mut App, area: Rect, detail: &AlbumD
 
 #[cfg(test)]
 mod tests {
-    use super::grid_layout;
+    use super::{fit_text, grid_layout};
 
     // iTerm2 on a retina Mac: 14x30 px cells.
     const FW: u16 = 14;
@@ -673,5 +732,17 @@ mod tests {
         for (w, h) in [(0, 0), (1, 1), (10, 3), (200, 1)] {
             let _ = grid_layout(w, h, FW, FH);
         }
+    }
+
+    #[test]
+    fn fit_text_keeps_short_text_and_cuts_long_text_at_a_word() {
+        assert_eq!(fit_text("short review", 4, 80), "short review");
+        let long = "word ".repeat(200);
+        let out = fit_text(&long, 3, 40);
+        assert!(out.ends_with('…') && out.chars().count() <= 3 * 40);
+        assert!(!out.trim_end_matches('…').ends_with(' '));
+        // Multi-byte characters must not be cut mid-codepoint.
+        let uni = fit_text("héllo wörld ünïcode ñandú", 1, 12);
+        assert!(uni.ends_with('…') && uni.chars().count() <= 12);
     }
 }
