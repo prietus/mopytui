@@ -1,5 +1,9 @@
 <h1 align="center">mopytui</h1>
 
+<p align="center">
+  <img src="assets/demo.gif" width="100%" alt="mopytui demo: queue with cover and spectrum, albums grid, search with detail panel and now playing" />
+</p>
+
 A full-featured terminal client for [Mopidy](https://mopidy.com/) — built
 around the native JSON-RPC API so it surfaces everything `mopidy-mpd` does
 *and more*, including Tidal browsing/search if the server has
@@ -9,39 +13,18 @@ Renders cover art with the best protocol your terminal supports —
 **Kitty graphics**, **iTerm2 inline images**, **Sixel**, or **unicode
 halfblocks** — detected at runtime.
 
-```
-╭─ [Playing] ──────╮ ╭──────────────────────────────╮ ╭─ Vol ▰▰▰▰▰▱ 72% ──╮
-│ 2:41 / 4:32      │ │   Black Hole Sun             │ │ ↻ ⇄ ∞ ✕      ●    │
-│ 1411 kbps        │ │   Soundgarden · Superunknown │ │                   │
-│ 16-bit · 44 kHz  │ │                              │ │                   │
-╰──────────────────╯ ╰──────────────────────────────╯ ╰───────────────────╯
- 1 Queue  2 Albums  3 Library  4 Playlists  5 Search  6 Playing  7 Stats  8 Info
-╭─ Queue — 8 ─────────╮ ╭────────────────────────────────────────────────────╮
-│ ┌─────────────────┐ │ │   #  Artist        Title          Album       Len │
-│ │                 │ │ │  01  Soundgarden   Let Me Drown   Superun…   3:50 │
-│ │     COVER       │ │ │ ▶02  Soundgarden   Black Hole Sun Superun…   5:18 │
-│ │                 │ │ │  03  Soundgarden   Spoonman       Superun…   4:07 │
-│ └─────────────────┘ │ │                                                   │
-│ ▸ Soundgarden       │ │                                                   │
-│ Superunknown · 1994 │ │                                                   │
-│ played 47×          │ │                                                   │
-╰─────────────────────╯ ╰────────────────────────────────────────────────────╯
- ▶  2:41  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━●─────────────────────────  5:18
- [space] play/pause · [>] next · [/] search · [f] favorite · [?] help
-```
-
 ## Screenshots
 
 <p align="center">
-  <img src="assets/queue.png" width="48%" alt="Queue view with cover and spectrum visualizer" />
-  <img src="assets/lyrics.png" width="48%" alt="Now Playing with synced lyrics" />
+  <img src="assets/shots/queue.png" width="48%" alt="Queue with cover art, audio chain and spectrum visualizer" />
+  <img src="assets/shots/albums.png" width="48%" alt="Albums grid with real covers" />
 </p>
 <p align="center">
-  <img src="assets/album.png" width="48%" alt="Album detail with credits and tracks" />
-  <img src="assets/info.png" width="48%" alt="Info view with album and artist data" />
+  <img src="assets/shots/search.png" width="48%" alt="Search: results grouped by Tidal and Local, with a detail panel" />
+  <img src="assets/shots/info.png" width="48%" alt="Info view with album credits and Tidal artist biography" />
 </p>
 <p align="center">
-  <img src="assets/search.png" width="48%" alt="Cross-source search" />
+  <img src="assets/shots/playing.png" width="48%" alt="Now Playing with synced lyrics" />
 </p>
 
 ## Features
@@ -51,8 +34,11 @@ halfblocks** — detected at runtime.
 - Browse the entire Mopidy library tree (Local, Tidal, file-system,
   playlists, anything a backend exposes).
 - Cross-source search (`core.library.search`) — local + Tidal together.
-  Source chips (`LOCAL` / `TIDAL`) on every hit, favorite albums from the
-  results with `f`, play an album with `p` or queue with `a`.
+  Results are grouped under `TIDAL` / `LOCAL` and by albums · artists ·
+  tracks; the highlighted one gets a detail panel with its cover, facts and
+  track list (`→` to pick a track). Add albums to your Tidal library with
+  `f`, play with `p`, queue with `a`, start a radio with `o`. `Ctrl+F` shows
+  the advanced filters (artist, album, title, genre, date…).
 - Queue management — add, reorder, remove, clear, shuffle.
 - Playback control: play/pause/stop/next/prev/seek/volume/mute.
 - All playback modes: random, repeat, single, consume.
