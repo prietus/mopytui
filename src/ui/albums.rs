@@ -518,7 +518,26 @@ fn render_detail_right(f: &mut Frame, app: &mut App, area: Rect, detail: &AlbumD
     // Wiki / credits block
     let mut wiki_lines: Vec<Line> = Vec::new();
     if let Some(meta) = &app.current_album_meta {
-        if let Some(w) = &meta.wiki {
+        if let Some(t) = &meta.tidal {
+            // Tidal's editorial review (with its source) beats the Wikipedia
+            // article, which is often a loose title match.
+            let heading = match t.source.as_deref().filter(|s| !s.is_empty()) {
+                Some(src) => format!("Review · Tidal ({src})"),
+                None => "Review · Tidal".to_string(),
+            };
+            wiki_lines.push(Line::from(Span::styled(
+                heading,
+                Style::default()
+                    .fg(app.theme.accent_alt)
+                    .add_modifier(Modifier::BOLD),
+            )));
+            for line in t.text.lines().take(8) {
+                wiki_lines.push(Line::from(Span::styled(
+                    line.to_string(),
+                    Style::default().fg(app.theme.fg),
+                )));
+            }
+        } else if let Some(w) = &meta.wiki {
             wiki_lines.push(Line::from(Span::styled(
                 w.title.clone(),
                 Style::default()

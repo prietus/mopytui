@@ -993,13 +993,28 @@ pub async fn open_album_detail(app: &mut App, uri: String) {
     let slot = app.meta_slot.clone();
     let artist = detail.card.artist.clone();
     let album = detail.card.name.clone();
+    // Tidal's own review/bio via goodies, resolved from any track of the
+    // album (they carry the album and artist URIs). Skipped while a Tidal
+    // login is pending: goodies has no session to answer with.
+    let seed_track = if app.tidal_login.is_none() { detail.tracks.first().cloned() } else { None };
+    let client = app.client.clone();
     tokio::spawn(async move {
-        let (a_meta, ar_meta) = tokio::join!(
+        let (a_meta, ar_meta, tidal) = tokio::join!(
             async {
                 if album.trim().is_empty() { None } else { Some(state.album(&artist, &album).await) }
             },
             state.artist(&artist),
+            async {
+                match &seed_track {
+                    Some(t) => fetch_tidal_texts(&client, t).await,
+                    None => TidalLookup::default(),
+                }
+            },
         );
+        let mut a_meta = a_meta;
+        let mut ar_meta = ar_meta;
+        if let Some(a) = a_meta.as_mut() { a.tidal = tidal.review; }
+        ar_meta.tidal = tidal.bio;
         let mut s = slot.lock().unwrap();
         if s.key.as_deref() == Some(key.as_str()) {
             if let Some(a) = a_meta { s.album = Some(a); }
