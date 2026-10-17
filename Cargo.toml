@@ -40,6 +40,10 @@ rustfft = "6"
 
 # MPRIS (D-Bus) integration — Linux only. Lets KDE/GNOME/Waybar/Polybar talk
 # to mopytui as a regular media player.
+[target.'cfg(unix)'.dependencies]
+# Raw stdin poll/read for iTerm2's ReportCellSize query (see images::iterm2_cell_px).
+libc = "0.2"
+
 [target.'cfg(target_os = "linux")'.dependencies]
 mpris-server = "0.9"
 

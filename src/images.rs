@@ -95,7 +95,95 @@ pub fn make_picker(override_protocol: Option<&str>) -> Picker {
     if let Some(pt) = cli_force.or(env_force) {
         picker.set_protocol_type(pt);
     }
+    // iTerm2 (3.7+) answers the standard cell-size query in points, so on a
+    // Retina display covers came out at half size. Its own ReportCellSize
+    // carries the backing scale; use that to get real pixels.
+    if picker.protocol_type() == ProtocolType::Iterm2
+        && std::env::var_os("TMUX").is_none()
+        && let Some((w, h)) = iterm2_cell_px()
+    {
+        let pt = picker.protocol_type();
+        #[allow(deprecated)] // the only way to set a known font size
+        let mut p = Picker::from_fontsize(ratatui_image::FontSize::new(w, h));
+        p.set_protocol_type(pt);
+        picker = p;
+    }
     picker
+}
+
+/// The cell size in device pixels from iTerm2's `OSC 1337;ReportCellSize`
+/// (`height;width;scale`, in points). Followed by a DSR query that every
+/// terminal answers, so reading stops at that reply instead of waiting out
+/// the timeout when the first query goes unanswered. Expects raw mode.
+#[cfg(unix)]
+fn iterm2_cell_px() -> Option<(u16, u16)> {
+    use std::io::Write;
+    use std::os::fd::AsRawFd;
+    use std::time::{Duration, Instant};
+
+    let mut out = std::io::stdout();
+    out.write_all(b"\x1b]1337;ReportCellSize\x07\x1b[5n").ok()?;
+    out.flush().ok()?;
+
+    let fd = std::io::stdin().as_raw_fd();
+    let deadline = Instant::now() + Duration::from_millis(500);
+    let mut buf = Vec::new();
+    while !buf.windows(4).any(|w| w == b"\x1b[0n") {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        let mut pfd = libc::pollfd { fd, events: libc::POLLIN, revents: 0 };
+        // SAFETY: one valid pollfd, and a stack buffer of the length passed.
+        if unsafe { libc::poll(&mut pfd, 1, left.as_millis() as i32) } <= 0 {
+            break;
+        }
+        let mut chunk = [0u8; 256];
+        let n = unsafe { libc::read(fd, chunk.as_mut_ptr().cast(), chunk.len()) };
+        if n <= 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n as usize]);
+    }
+    parse_report_cell_size(&buf)
+}
+
+#[cfg(not(unix))]
+fn iterm2_cell_px() -> Option<(u16, u16)> {
+    None
+}
+
+/// `…ReportCellSize=<height>;<width>[;<scale>]` (ST- or BEL-terminated) →
+/// `(width, height)` in device pixels.
+fn parse_report_cell_size(buf: &[u8]) -> Option<(u16, u16)> {
+    let s = String::from_utf8_lossy(buf);
+    let rest = &s[s.find("ReportCellSize=")? + "ReportCellSize=".len()..];
+    let body = &rest[..rest.find(['\x1b', '\x07'])?];
+    let mut vals = body.split(';').map(|v| v.parse::<f64>().ok());
+    let h = vals.next()??;
+    let w = vals.next()??;
+    let scale = vals.next().flatten().unwrap_or(1.0);
+    let (w, h) = ((w * scale).round(), (h * scale).round());
+    (w >= 1.0 && h >= 1.0 && w < 1000.0 && h < 1000.0).then_some((w as u16, h as u16))
+}
+
+#[cfg(test)]
+mod cell_size_tests {
+    use super::parse_report_cell_size;
+
+    #[test]
+    fn retina_report_is_scaled_to_pixels() {
+        // Verbatim iTerm2 3.7.6 reply on a 2x display (ST-terminated), with
+        // the CSI 16t / DSR answers that follow it.
+        let reply = b"\x1b]1337;ReportCellSize=15.0;7.0;2.0\x1b\\\x1b[6;15;7t\x1b[0n";
+        assert_eq!(parse_report_cell_size(reply), Some((14, 30)));
+    }
+
+    #[test]
+    fn bel_terminated_and_scaleless_replies() {
+        assert_eq!(parse_report_cell_size(b"\x1b]1337;ReportCellSize=16.5;8.25\x07"), Some((8, 17)));
+        assert_eq!(parse_report_cell_size(b"\x1b[0n"), None, "no answer: keep the query's size");
+    }
 }
 
 pub async fn fetch_and_decode(
