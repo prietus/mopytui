@@ -60,6 +60,20 @@ halfblocks** — detected at runtime.
   installed.
 - Live updates via `mpd` `idle` subscription (player/mixer/options/playlist).
 
+## Install
+
+**Homebrew** (macOS on Apple Silicon, or Linux x86_64):
+
+```sh
+brew install prietus/tap/mopytui
+brew upgrade mopytui        # later, for new releases
+```
+
+**Prebuilt binaries** for macOS (Apple Silicon), Linux and Windows are attached
+to every [release](https://github.com/prietus/mopytui/releases). Arch Linux
+users can use the AUR packages in `packaging/aur` (`mopytui-bin`,
+`mopytui-git`), or build from source (see below).
+
 ## Requirements
 
 - A reachable Mopidy server with `mopidy-http` (always on by default) and
