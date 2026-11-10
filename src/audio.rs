@@ -1,17 +1,18 @@
-// The spectrum panel is opt-in via `audio_pipe` / `audio_tcp` in config.toml.
-// We keep the audio pipeline + FFT always compiled in so it can be re-enabled
-// without rebuilding.
+// The spectrum panel gets real audio from mopidy-goodies' WebSocket feed when
+// the server offers one, or from `audio_udp` / `audio_tcp` / `audio_pipe` in
+// config.toml. Without any of them it falls back to a synthesised spectrum.
 #![allow(dead_code)]
 
 //! Audio reader for the live spectrum visualizer.
 //!
-//! Mopidy doesn't expose audio samples to JSON-RPC clients. To get a real
-//! spectrum we ask the user to configure Mopidy's GStreamer `[audio] output`
-//! to `tee` the audio stream into a sink we can read — either a named pipe
-//! (FIFO) or a TCP server. The PCM is then read in a background thread and
-//! stashed in a ring buffer for the UI to FFT.
+//! Mopidy doesn't expose audio samples to JSON-RPC clients. The usual source
+//! is mopidy-goodies' `WS /goodies/audio/visualizer` feed (raw S16LE stereo
+//! PCM at 44.1 kHz, one binary message per chunk), which is picked up
+//! automatically when `/goodies/_health` reports `"visualizer": true`. The
+//! PCM is stashed in a ring buffer for the UI to FFT.
 //!
-//! Recommended `mopidy.conf` snippet (UDP, fire-and-forget):
+//! Without goodies, Mopidy's GStreamer `[audio] output` can `tee` the stream
+//! straight to us (UDP, TCP or a named pipe). `mopidy.conf` snippet for UDP:
 //!
 //! ```text
 //! [audio]
@@ -44,14 +45,18 @@ use std::io::Read;
 use std::net::{TcpStream, UdpSocket};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const SAMPLE_RATE: u32 = 44_100;
-/// Ring buffer length. ~185 ms of mono samples is enough to FFT a 2048-sample
-/// window while leaving headroom for jitter.
-const RING_CAP: usize = 8192;
+/// Ring buffer length: one second of mono samples. An FFT window is 2048
+/// samples; the rest is room for jitter and for `visualizer_delay_ms`.
+const RING_CAP: usize = 44_100;
+/// The UI is considered to be showing the visualizer if it asked for samples
+/// this recently. Sources that cost something (the WebSocket feed) only run
+/// while that holds, and the event loop only redraws fast meanwhile.
+const WANTED_FOR: Duration = Duration::from_secs(1);
 /// Bytes per stereo frame (s16le × 2 channels).
 const STEREO_FRAME_BYTES: usize = 4;
 
@@ -70,6 +75,13 @@ pub struct AudioReader {
     samples: Mutex<VecDeque<f32>>,
     last_data_at: Mutex<Option<Instant>>,
     has_writer: AtomicBool,
+    /// When the UI last asked for samples (see [`WANTED_FOR`]).
+    wanted_at: Mutex<Option<Instant>>,
+    /// How far behind the newest sample the UI reads, to line the picture up
+    /// with what the DAC is playing (`visualizer_delay_ms`).
+    delay_samples: AtomicUsize,
+    /// Display smoothing state: per-band levels and the running peak.
+    smooth: Mutex<(Vec<f32>, f32)>,
 }
 
 impl AudioReader {
@@ -78,28 +90,63 @@ impl AudioReader {
             samples: Mutex::new(VecDeque::with_capacity(RING_CAP)),
             last_data_at: Mutex::new(None),
             has_writer: AtomicBool::new(false),
+            wanted_at: Mutex::new(None),
+            delay_samples: AtomicUsize::new(0),
+            smooth: Mutex::new((Vec::new(), 0.0)),
         }
     }
 
-    /// Snapshot the last `n` samples into `out`. Returns `false` if not
-    /// enough samples are buffered yet, or if no data has arrived recently
-    /// (older than 250 ms — Mopidy paused or pipe disconnected).
+    /// Read `ms` behind the live edge (clamped so an FFT window still fits).
+    pub fn set_delay_ms(&self, ms: u32) {
+        let samples = (ms as usize * SAMPLE_RATE as usize / 1000).min(RING_CAP - 4096);
+        self.delay_samples.store(samples, Ordering::Relaxed);
+    }
+
+    /// The UI is drawing the visualizer right now.
+    pub fn mark_wanted(&self) {
+        *self.wanted_at.lock().unwrap() = Some(Instant::now());
+    }
+
+    pub fn is_wanted(&self) -> bool {
+        self.wanted_at.lock().unwrap().is_some_and(|t| t.elapsed() < WANTED_FOR)
+    }
+
+    /// Data arrived within the last 250 ms.
+    pub fn is_fresh(&self) -> bool {
+        self.last_data_at.lock().unwrap().is_some_and(|t| t.elapsed() < Duration::from_millis(250))
+    }
+
+    /// Append raw S16LE stereo frames, downmixed to mono. `bytes` must be
+    /// frame-aligned (a trailing partial frame is ignored).
+    fn push_pcm(&self, bytes: &[u8]) {
+        let mut samples = self.samples.lock().unwrap();
+        for frame in bytes.chunks_exact(STEREO_FRAME_BYTES) {
+            let l = i16::from_le_bytes([frame[0], frame[1]]) as f32 / 32768.0;
+            let r = i16::from_le_bytes([frame[2], frame[3]]) as f32 / 32768.0;
+            if samples.len() >= RING_CAP {
+                samples.pop_front();
+            }
+            samples.push_back(0.5 * (l + r));
+        }
+        drop(samples);
+        *self.last_data_at.lock().unwrap() = Some(Instant::now());
+    }
+
+    /// Snapshot `n` samples into `out`, ending `delay_samples` before the
+    /// newest one. Returns `false` if not enough samples are buffered yet, or
+    /// if no data has arrived recently (Mopidy paused or source disconnected).
     pub fn copy_recent(&self, out: &mut Vec<f32>, n: usize) -> bool {
-        let fresh = self
-            .last_data_at
-            .lock()
-            .unwrap()
-            .map(|t| t.elapsed() < Duration::from_millis(250))
-            .unwrap_or(false);
-        if !fresh {
+        self.mark_wanted();
+        if !self.is_fresh() {
             return false;
         }
+        let delay = self.delay_samples.load(Ordering::Relaxed);
         let buf = self.samples.lock().unwrap();
-        if buf.len() < n {
+        if buf.len() < n + delay {
             return false;
         }
         out.clear();
-        out.extend(buf.iter().skip(buf.len() - n).copied());
+        out.extend(buf.iter().skip(buf.len() - delay - n).take(n).copied());
         true
     }
 
@@ -169,19 +216,7 @@ fn udp_loop(reader: Arc<AudioReader>, addr: String) {
                 Ok(n) => {
                     let usable = n - (n % STEREO_FRAME_BYTES);
                     if usable == 0 { continue; }
-                    let frames = &buf[..usable];
-                    let mut samples = reader.samples.lock().unwrap();
-                    for frame in frames.chunks_exact(STEREO_FRAME_BYTES) {
-                        let l = i16::from_le_bytes([frame[0], frame[1]]) as f32 / 32768.0;
-                        let r = i16::from_le_bytes([frame[2], frame[3]]) as f32 / 32768.0;
-                        let mono = 0.5 * (l + r);
-                        if samples.len() >= RING_CAP {
-                            samples.pop_front();
-                        }
-                        samples.push_back(mono);
-                    }
-                    drop(samples);
-                    *reader.last_data_at.lock().unwrap() = Some(Instant::now());
+                    reader.push_pcm(&buf[..usable]);
                     reader.has_writer.store(true, Ordering::Relaxed);
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
@@ -225,6 +260,75 @@ fn tcp_loop(reader: Arc<AudioReader>, addr: String) {
     }
 }
 
+/// Feed the ring buffer from mopidy-goodies' WebSocket visualizer feed
+/// (`ws://host:port/goodies/audio/visualizer`). Runs as a tokio task that is
+/// only connected while the UI is drawing the visualizer — the feed is ~176
+/// kB/s of PCM, not worth pulling for a panel nobody is looking at — and
+/// reconnects on its own after errors or a Mopidy restart.
+pub fn spawn_ws_reader(url: String) -> Arc<AudioReader> {
+    let reader = Arc::new(AudioReader::new());
+    let r = reader.clone();
+    tokio::spawn(async move { ws_loop(r, url).await });
+    reader
+}
+
+async fn ws_loop(reader: Arc<AudioReader>, url: String) {
+    use futures::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    loop {
+        if !reader.is_wanted() {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            continue;
+        }
+        let conn = tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio_tungstenite::connect_async(url.as_str()),
+        )
+        .await;
+        let mut ws = match conn {
+            Ok(Ok((ws, _))) => ws,
+            Ok(Err(e)) => {
+                tracing::debug!("visualizer ws {url}: {e}");
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                continue;
+            }
+            Err(_) => {
+                tracing::debug!("visualizer ws {url}: connect timeout");
+                tokio::time::sleep(Duration::from_secs(3)).await;
+                continue;
+            }
+        };
+        tracing::info!("visualizer ws connected: {url}");
+        reader.has_writer.store(true, Ordering::Relaxed);
+        // Chunks aren't guaranteed to end on a frame boundary: carry the
+        // remainder over so the channels never swap or go out of phase.
+        let mut carry: Vec<u8> = Vec::new();
+        while reader.is_wanted() {
+            // Wake up regularly even when paused (no messages) to notice the
+            // UI moved away.
+            match tokio::time::timeout(Duration::from_millis(500), ws.next()).await {
+                Err(_) => continue,
+                Ok(Some(Ok(Message::Binary(data)))) => {
+                    carry.extend_from_slice(&data);
+                    let usable = carry.len() - carry.len() % STEREO_FRAME_BYTES;
+                    reader.push_pcm(&carry[..usable]);
+                    carry.drain(..usable);
+                }
+                Ok(Some(Ok(Message::Close(_)))) | Ok(None) => break,
+                Ok(Some(Ok(_))) => {}
+                Ok(Some(Err(e))) => {
+                    tracing::debug!("visualizer ws read: {e}");
+                    break;
+                }
+            }
+        }
+        reader.has_writer.store(false, Ordering::Relaxed);
+        let _ = ws.close(None).await;
+        tracing::info!("visualizer ws closed");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+}
+
 fn read_until_eof<R: Read>(mut src: R, reader: &Arc<AudioReader>) {
     // Read in chunks aligned to stereo frames.
     let mut buf = [0u8; 4096];
@@ -234,21 +338,7 @@ fn read_until_eof<R: Read>(mut src: R, reader: &Arc<AudioReader>) {
             Ok(n) => {
                 let usable = n - (n % STEREO_FRAME_BYTES);
                 if usable == 0 { continue; }
-                let frames = &buf[..usable];
-                // s16le stereo → f32 mono (downmix average).
-                let mut samples = reader.samples.lock().unwrap();
-                let mut chunks = frames.chunks_exact(STEREO_FRAME_BYTES);
-                for frame in &mut chunks {
-                    let l = i16::from_le_bytes([frame[0], frame[1]]) as f32 / 32768.0;
-                    let r = i16::from_le_bytes([frame[2], frame[3]]) as f32 / 32768.0;
-                    let mono = 0.5 * (l + r);
-                    if samples.len() >= RING_CAP {
-                        samples.pop_front();
-                    }
-                    samples.push_back(mono);
-                }
-                drop(samples);
-                *reader.last_data_at.lock().unwrap() = Some(Instant::now());
+                reader.push_pcm(&buf[..usable]);
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock
                 || e.kind() == std::io::ErrorKind::TimedOut =>
@@ -314,15 +404,123 @@ pub fn compute_fft_bands(reader: &AudioReader, bands: usize) -> Option<Vec<f32>>
         out.push(sum / (hi - lo) as f32);
     }
 
-    // Per-band log compression, then normalise to [0, 1].
+    // Per-band log compression.
     for v in out.iter_mut() {
         *v = (1.0 + *v).ln();
     }
-    let max = out.iter().fold(0.0_f32, |a, &b| a.max(b));
-    if max > 0.0 {
-        for v in out.iter_mut() {
-            *v /= max;
-        }
-    }
+    let mut state = reader.smooth.lock().unwrap();
+    smooth_bands(&mut out, &mut state);
     Some(out)
+}
+
+/// Normalise `bands` to `[0, 1]` for display, in place.
+///
+/// The scale follows a running peak that decays slowly instead of each
+/// frame's own maximum, so quiet passages look quiet rather than being blown
+/// up to full height. Bars rise at once and fall gradually, which reads as
+/// "on the beat" at 25 fps without flickering.
+fn smooth_bands(bands: &mut [f32], state: &mut (Vec<f32>, f32)) {
+    const PEAK_DECAY: f32 = 0.995;
+    const PEAK_FLOOR: f32 = 0.5;
+    const FALL: f32 = 0.80;
+    let (levels, peak) = state;
+    if levels.len() != bands.len() {
+        *levels = vec![0.0; bands.len()];
+    }
+    let frame_max = bands.iter().fold(0.0_f32, |a, &b| a.max(b));
+    *peak = frame_max.max(*peak * PEAK_DECAY).max(PEAK_FLOOR);
+    for (v, level) in bands.iter_mut().zip(levels.iter_mut()) {
+        let now = (*v / *peak).clamp(0.0, 1.0);
+        *level = now.max(*level * FALL);
+        *v = *level;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frames(pairs: &[(i16, i16)]) -> Vec<u8> {
+        pairs.iter().flat_map(|(l, r)| [l.to_le_bytes(), r.to_le_bytes()].concat()).collect()
+    }
+
+    #[test]
+    fn push_pcm_downmixes_and_caps_the_ring() {
+        let r = AudioReader::new();
+        r.push_pcm(&frames(&[(16384, 16384), (32767, -32767), (0, 0)]));
+        let buf: Vec<f32> = r.samples.lock().unwrap().iter().copied().collect();
+        assert_eq!(buf, vec![0.5, 0.0, 0.0]);
+        // A trailing partial frame is ignored; the ring never outgrows its cap.
+        r.push_pcm(&[1, 2, 3]);
+        assert_eq!(r.samples.lock().unwrap().len(), 3);
+        r.push_pcm(&vec![0u8; (RING_CAP + 10) * STEREO_FRAME_BYTES]);
+        assert_eq!(r.samples.lock().unwrap().len(), RING_CAP);
+    }
+
+    #[test]
+    fn copy_recent_reads_behind_the_live_edge_by_the_delay() {
+        let r = AudioReader::new();
+        let mut out = Vec::new();
+        assert!(!r.copy_recent(&mut out, 2), "no data yet");
+        assert!(r.is_wanted(), "asking for samples marks the visualizer as shown");
+        // Samples 1..=10 (scaled); the newest is 10.
+        let pcm = frames(&(1..=10).map(|i| (i * 3276, i * 3276)).collect::<Vec<_>>());
+        r.push_pcm(&pcm);
+        assert!(r.copy_recent(&mut out, 2));
+        assert!((out[1] - 10.0 * 3276.0 / 32768.0).abs() < 1e-6);
+        r.delay_samples.store(3, Ordering::Relaxed);
+        assert!(r.copy_recent(&mut out, 2));
+        assert!((out[1] - 7.0 * 3276.0 / 32768.0).abs() < 1e-6, "ends 3 samples earlier");
+        // Not enough history for window + delay.
+        r.delay_samples.store(9, Ordering::Relaxed);
+        assert!(!r.copy_recent(&mut out, 2));
+    }
+
+    #[test]
+    fn delay_is_clamped_so_a_window_still_fits() {
+        let r = AudioReader::new();
+        r.set_delay_ms(150);
+        assert_eq!(r.delay_samples.load(Ordering::Relaxed), 6615);
+        r.set_delay_ms(60_000);
+        assert!(r.delay_samples.load(Ordering::Relaxed) + 4096 <= RING_CAP);
+    }
+
+    /// Manual check against a real server that is playing something:
+    /// `MOPYTUI_WS_URL=ws://host:6680/goodies/audio/visualizer cargo test live_ws -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn live_ws_feed_fills_the_ring_only_while_wanted() {
+        let url = std::env::var("MOPYTUI_WS_URL").expect("set MOPYTUI_WS_URL");
+        let r = spawn_ws_reader(url);
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(!r.is_live(), "must not connect before the UI asks for samples");
+        let mut got = None;
+        for _ in 0..50 {
+            got = compute_fft_bands(&r, 32).or(got);
+            tokio::time::sleep(Duration::from_millis(40)).await;
+        }
+        let bands = got.expect("no audio arrived in 2 s (is something playing?)");
+        println!("live={} buffered={} bands={:.2?}", r.is_live(), r.samples.lock().unwrap().len(), bands);
+        assert!(r.is_live() && bands.iter().any(|v| *v > 0.05));
+        // Stop asking: the reader must disconnect by itself.
+        tokio::time::sleep(Duration::from_millis(2000)).await;
+        assert!(!r.is_live(), "still connected after the UI stopped asking");
+    }
+
+    #[test]
+    fn smoothing_keeps_quiet_passages_quiet_and_lets_bars_fall_gradually() {
+        let mut state = (Vec::new(), 0.0);
+        let mut loud = [4.0_f32, 2.0];
+        smooth_bands(&mut loud, &mut state);
+        assert_eq!(loud, [1.0, 0.5]);
+        // A much quieter frame right after: scaled by the remembered peak,
+        // not blown up to full height, and no lower than the decayed bar.
+        let mut quiet = [0.4_f32, 0.2];
+        smooth_bands(&mut quiet, &mut state);
+        assert!(quiet[0] < 0.85 && quiet[0] >= 0.79, "{quiet:?}");
+        // Silence decays towards zero instead of dropping at once.
+        let mut silence = [0.0_f32, 0.0];
+        smooth_bands(&mut silence, &mut state);
+        assert!(silence[0] > 0.5 && silence[0] < quiet[0]);
+    }
 }

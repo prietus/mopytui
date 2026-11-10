@@ -1145,8 +1145,9 @@ fn fetch_cover_async(app: &App, image_uri: String) {
 
 pub async fn check_goodies(app: &mut App) {
     match app.client.goodies_health().await {
-        Ok(Some(_)) => {
+        Ok(Some(health)) => {
             app.goodies.available = true;
+            start_visualizer_feed(app, &health);
             // Pull favorites once so the ★ markers light up in library views.
             // Skipped while Tidal needs a login: goodies has no session to use.
             if app.tidal_login.is_none() {
@@ -1158,6 +1159,25 @@ pub async fn check_goodies(app: &mut App) {
         }
         _ => app.goodies.available = false,
     }
+}
+
+/// Use goodies' WebSocket visualizer feed for the spectrum when the server
+/// offers one and no explicit `audio_*` source is configured. Started once;
+/// the reader only stays connected while the spectrum is on screen.
+fn start_visualizer_feed(app: &mut App, health: &serde_json::Value) {
+    if app.audio_reader.is_some() || app.cfg.audio_ws == Some(false) {
+        return;
+    }
+    if health.pointer("/features/visualizer").and_then(|v| v.as_bool()) != Some(true) {
+        return;
+    }
+    let url = format!(
+        "ws://{}:{}/goodies/audio/visualizer",
+        app.cfg.host, app.cfg.http_port
+    );
+    let reader = crate::audio::spawn_ws_reader(url);
+    reader.set_delay_ms(app.cfg.visualizer_delay_ms.unwrap_or(0));
+    app.audio_reader = Some(reader);
 }
 
 /// Pull the live chain snapshot from `tidal_goodies /audio/active`. Updates

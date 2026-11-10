@@ -21,6 +21,7 @@ pub enum AppEvent {
 pub struct Events {
     input: EventStream,
     tick: Interval,
+    tick_ms: u64,
     mpd: broadcast::Receiver<MpdEvent>,
     cmds: mpsc::UnboundedReceiver<Cmd>,
 }
@@ -33,7 +34,19 @@ impl Events {
     ) -> Self {
         let mut t = interval(Duration::from_millis(tick_ms));
         t.set_missed_tick_behavior(MissedTickBehavior::Skip);
-        Self { input: EventStream::new(), tick: t, mpd, cmds }
+        Self { input: EventStream::new(), tick: t, tick_ms, mpd, cmds }
+    }
+
+    /// Change the tick period (no-op when it is already `tick_ms`).
+    pub fn set_tick_ms(&mut self, tick_ms: u64) {
+        if tick_ms == self.tick_ms {
+            return;
+        }
+        let period = Duration::from_millis(tick_ms);
+        let mut t = tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+        t.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        self.tick = t;
+        self.tick_ms = tick_ms;
     }
 
     pub async fn next(&mut self) -> AppEvent {

@@ -31,6 +31,15 @@ pub struct AppConfig {
     /// Requires `mkfifo` and a `filesink` in mopidy's `output`.
     #[serde(default)]
     pub audio_pipe: Option<String>,
+    /// Use mopidy-goodies' WebSocket visualizer feed when the server offers
+    /// one and none of the `audio_*` sources above is set. On by default;
+    /// `false` keeps the synthesised spectrum.
+    #[serde(default)]
+    pub audio_ws: Option<bool>,
+    /// Show the spectrum this many ms behind the incoming audio, to line it
+    /// up with the speakers when the picture runs ahead of the sound.
+    #[serde(default)]
+    pub visualizer_delay_ms: Option<u32>,
     /// Default visualizer style for the spectrum panel: `bars`, `mirror`,
     /// `dots`, or `wave`. Cycled at runtime with `v`.
     #[serde(default)]
@@ -59,6 +68,8 @@ impl Default for AppConfig {
             audio_udp: None,
             audio_tcp: None,
             audio_pipe: None,
+            audio_ws: None,
+            visualizer_delay_ms: None,
             visualizer_style: None,
             lastfm_api_key: None,
             fanart_api_key: None,
@@ -78,12 +89,19 @@ theme = "midnight"
 # Enable MPRIS integration (Linux only — no-op elsewhere).
 mpris = false
 
-# Live FFT spectrum visualizer (optional). Configure mopidy's `[audio] output`
-# to `tee` the stream into a sink mopytui can read. Bit-perfect to the DAC is
-# preserved because `tee` only duplicates buffers and the visualizer branch
-# uses `leaky=2` queues so it never blocks the audio path.
+# Live FFT spectrum visualizer. With mopidy-goodies' visualizer feed set up on
+# the server (see its README), mopytui picks it up over WebSocket on its own —
+# nothing to configure here. Set `audio_ws = false` to keep the synthesised
+# spectrum instead.
+# audio_ws = true
 #
-# Recommended: UDP (fire-and-forget, no preroll). Add to mopidy.conf:
+# If the picture runs ahead of the sound, delay it (milliseconds):
+# visualizer_delay_ms = 150
+#
+# Without goodies, mopidy's `[audio] output` can `tee` the stream straight to
+# mopytui. Bit-perfect to the DAC is preserved because `tee` only duplicates
+# buffers and the visualizer branch uses `leaky=2` queues so it never blocks
+# the audio path. UDP (fire-and-forget, no preroll); add to mopidy.conf:
 #
 #     [audio]
 #     output = tee name=t allow-not-linked=true t. ! queue leaky=2 max-size-buffers=200 ! autoaudiosink t. ! queue leaky=2 max-size-buffers=200 ! audioresample ! audioconvert ! audio/x-raw,format=S16LE,rate=44100,channels=2 ! udpsink host=<mopytui-host> port=5555 sync=false

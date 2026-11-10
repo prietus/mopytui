@@ -37,6 +37,7 @@ thiserror = "2"
 base64 = "0.22"
 unicode-width = "0.2"
 rustfft = "6"
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect"] }
 
 # MPRIS (D-Bus) integration — Linux only. Lets KDE/GNOME/Waybar/Polybar talk
 # to mopytui as a regular media player.

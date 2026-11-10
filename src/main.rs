@@ -84,6 +84,9 @@ async fn main() -> Result<()> {
                 .map(|p| audio::AudioSource::Fifo(std::path::PathBuf::from(p)))
         });
     let audio_reader = audio_source.map(audio::spawn_audio_reader);
+    if let Some(r) = &audio_reader {
+        r.set_delay_ms(cfg.visualizer_delay_ms.unwrap_or(0));
+    }
 
     let mut app = App::new(cfg, client, images, picker, audio_reader);
 
@@ -96,11 +99,10 @@ async fn main() -> Result<()> {
     let (mpris_cmd_tx, mpris_cmd_rx) = tokio::sync::mpsc::unbounded_channel::<Cmd>();
     let mpris_handle = mpris::spawn(mpris_cmd_tx);
 
-    // 250ms tick keeps the progress bar fluid enough at 4 fps while
-    // reducing terminal-paint pressure — iTerm2 flickers embedded images
-    // when there's constant escape traffic from other cells (the waveform
-    // gradient, playhead) at 10 Hz.
-    let mut events = Events::new(mpd_rx, mpris_cmd_rx, 250);
+    // A 250 ms tick keeps the progress bar fluid enough at 4 fps without
+    // constant terminal traffic. `run` speeds it up while a live spectrum is
+    // on screen.
+    let mut events = Events::new(mpd_rx, mpris_cmd_rx, TICK_MS);
 
     let res = run(&mut terminal, &mut app, &mut events, &mpris_handle).await;
 
@@ -166,6 +168,10 @@ fn install_panic_hook() {
     }));
 }
 
+/// Idle redraw period, and the one used while a live spectrum is on screen.
+const TICK_MS: u64 = 250;
+const FAST_TICK_MS: u64 = 40;
+
 async fn run(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
@@ -175,6 +181,13 @@ async fn run(
     let mut drawer = draw::Drawer::default();
     loop {
         drawer.draw(terminal, |f| ui::render(f, app))?;
+        // Redraw at 25 fps while a live spectrum is on screen so it follows
+        // the music; 4 fps is plenty for everything else.
+        let live_spectrum = app
+            .audio_reader
+            .as_ref()
+            .is_some_and(|r| r.is_wanted() && r.is_fresh());
+        events.set_tick_ms(if live_spectrum { FAST_TICK_MS } else { TICK_MS });
         let ev = events.next().await;
         handle(app, ev, mpris).await?;
         if app.quit { break; }
