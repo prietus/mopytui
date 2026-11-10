@@ -82,6 +82,67 @@ pub struct AudioReader {
     delay_samples: AtomicUsize,
     /// Display smoothing state: per-band levels and the running peak.
     smooth: Mutex<(Vec<f32>, f32)>,
+    /// The same audio as `samples`, left and right kept apart for the VU meter.
+    stereo: Mutex<VecDeque<[f32; 2]>>,
+    vu: Mutex<VuState>,
+}
+
+/// Bottom of the VU scale, in dBFS. The top is 0 dBFS (digital full scale).
+pub const VU_MIN_DB: f32 = -48.0;
+
+/// What the VU meter shows for [left, right], in dBFS.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Vu {
+    /// RMS level with meter ballistics (instant rise, steady fall).
+    pub level: [f32; 2],
+    /// Sample peak, held briefly and then released.
+    pub peak: [f32; 2],
+}
+
+struct VuState {
+    vu: Vu,
+    /// Seconds each peak marker has been held.
+    held: [f32; 2],
+    last: Option<Instant>,
+}
+
+impl Default for VuState {
+    fn default() -> Self {
+        Self {
+            vu: Vu { level: [VU_MIN_DB; 2], peak: [VU_MIN_DB; 2] },
+            held: [0.0; 2],
+            last: None,
+        }
+    }
+}
+
+/// Advance the meter by `dt` seconds given the newly measured RMS and sample
+/// peak (dBFS) of each channel. Levels jump up at once and fall at a steady
+/// rate; peak markers hold for a moment, then drop.
+fn vu_step(state: &mut VuState, rms_db: [f32; 2], peak_db: [f32; 2], dt: f32) -> Vu {
+    const FALL_DB_PER_S: f32 = 30.0;
+    const PEAK_HOLD_S: f32 = 0.8;
+    const PEAK_FALL_DB_PER_S: f32 = 24.0;
+    for ch in 0..2 {
+        let level = &mut state.vu.level[ch];
+        *level = rms_db[ch].max(*level - FALL_DB_PER_S * dt).clamp(VU_MIN_DB, 0.0);
+        let peak = &mut state.vu.peak[ch];
+        if peak_db[ch] >= *peak {
+            *peak = peak_db[ch];
+            state.held[ch] = 0.0;
+        } else {
+            state.held[ch] += dt;
+            if state.held[ch] > PEAK_HOLD_S {
+                *peak -= PEAK_FALL_DB_PER_S * dt;
+            }
+        }
+        *peak = peak.max(state.vu.level[ch]).clamp(VU_MIN_DB, 0.0);
+    }
+    state.vu
+}
+
+fn to_db(amplitude: f32) -> f32 {
+    if amplitude <= 0.0 { VU_MIN_DB } else { (20.0 * amplitude.log10()).max(VU_MIN_DB) }
 }
 
 impl AudioReader {
@@ -93,7 +154,41 @@ impl AudioReader {
             wanted_at: Mutex::new(None),
             delay_samples: AtomicUsize::new(0),
             smooth: Mutex::new((Vec::new(), 0.0)),
+            stereo: Mutex::new(VecDeque::with_capacity(RING_CAP)),
+            vu: Mutex::new(VuState::default()),
         }
+    }
+
+    /// Current VU reading from the last ~50 ms of audio (behind the live edge
+    /// by the configured delay). `None` when there is no fresh audio.
+    pub fn vu(&self) -> Option<Vu> {
+        const WINDOW: usize = SAMPLE_RATE as usize / 20;
+        self.mark_wanted();
+        if !self.is_fresh() {
+            *self.vu.lock().unwrap() = VuState::default();
+            return None;
+        }
+        let delay = self.delay_samples.load(Ordering::Relaxed);
+        let (mut sum, mut peak) = ([0.0_f32; 2], [0.0_f32; 2]);
+        {
+            let buf = self.stereo.lock().unwrap();
+            if buf.len() < WINDOW + delay {
+                return None;
+            }
+            for frame in buf.iter().skip(buf.len() - delay - WINDOW).take(WINDOW) {
+                for ch in 0..2 {
+                    sum[ch] += frame[ch] * frame[ch];
+                    peak[ch] = peak[ch].max(frame[ch].abs());
+                }
+            }
+        }
+        let rms_db = [to_db((sum[0] / WINDOW as f32).sqrt()), to_db((sum[1] / WINDOW as f32).sqrt())];
+        let peak_db = [to_db(peak[0]), to_db(peak[1])];
+        let mut state = self.vu.lock().unwrap();
+        let now = Instant::now();
+        let dt = state.last.map_or(0.0, |t| now.duration_since(t).as_secs_f32()).min(0.5);
+        state.last = Some(now);
+        Some(vu_step(&mut state, rms_db, peak_db, dt))
     }
 
     /// Read `ms` behind the live edge (clamped so an FFT window still fits).
@@ -120,14 +215,18 @@ impl AudioReader {
     /// frame-aligned (a trailing partial frame is ignored).
     fn push_pcm(&self, bytes: &[u8]) {
         let mut samples = self.samples.lock().unwrap();
+        let mut stereo = self.stereo.lock().unwrap();
         for frame in bytes.chunks_exact(STEREO_FRAME_BYTES) {
             let l = i16::from_le_bytes([frame[0], frame[1]]) as f32 / 32768.0;
             let r = i16::from_le_bytes([frame[2], frame[3]]) as f32 / 32768.0;
             if samples.len() >= RING_CAP {
                 samples.pop_front();
+                stereo.pop_front();
             }
             samples.push_back(0.5 * (l + r));
+            stereo.push_back([l, r]);
         }
+        drop(stereo);
         drop(samples);
         *self.last_data_at.lock().unwrap() = Some(Instant::now());
     }
@@ -505,6 +604,37 @@ mod tests {
         // Stop asking: the reader must disconnect by itself.
         tokio::time::sleep(Duration::from_millis(2000)).await;
         assert!(!r.is_live(), "still connected after the UI stopped asking");
+    }
+
+    #[test]
+    fn vu_reads_each_channel_in_dbfs() {
+        let r = AudioReader::new();
+        // Left: full-scale square wave (0 dBFS RMS). Right: half scale (-6 dB).
+        let pcm = frames(&(0..4410).map(|i| if i % 2 == 0 { (32767, 16384) } else { (-32767, -16384) }).collect::<Vec<_>>());
+        r.push_pcm(&pcm);
+        let vu = r.vu().expect("fresh audio");
+        assert!(vu.level[0] > -0.1, "{vu:?}");
+        assert!((vu.level[1] + 6.02).abs() < 0.1, "{vu:?}");
+        assert!(vu.peak[0] >= vu.level[0] && vu.peak[1] >= vu.level[1]);
+    }
+
+    #[test]
+    fn vu_ballistics_rise_at_once_fall_steadily_and_hold_the_peak() {
+        let mut st = VuState::default();
+        let quiet = [VU_MIN_DB; 2];
+        let vu = vu_step(&mut st, [-10.0, -20.0], [-4.0, -12.0], 0.04);
+        assert_eq!(vu.level, [-10.0, -20.0]);
+        assert_eq!(vu.peak, [-4.0, -12.0]);
+        // 0.1 s of silence: the level has fallen 3 dB, the peak is still held.
+        let vu = vu_step(&mut st, quiet, quiet, 0.1);
+        assert!((vu.level[0] + 13.0).abs() < 1e-3, "{vu:?}");
+        assert_eq!(vu.peak[0], -4.0);
+        // After the hold time the peak starts to drop, but never below the level.
+        let vu = vu_step(&mut st, quiet, quiet, 1.0);
+        assert!(vu.peak[0] < -4.0 && vu.peak[0] >= vu.level[0], "{vu:?}");
+        // Long silence bottoms out at the scale minimum.
+        let vu = vu_step(&mut st, quiet, quiet, 10.0);
+        assert_eq!(vu.level, quiet);
     }
 
     #[test]

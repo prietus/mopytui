@@ -35,6 +35,8 @@ pub enum VisStyle {
     Dots,
     /// Raw PCM waveform plotted around the centre axis.
     Wave,
+    /// Stereo VU meter: one horizontal level bar per channel with peak hold.
+    Vu,
 }
 
 impl VisStyle {
@@ -43,6 +45,7 @@ impl VisStyle {
             Some("mirror") => Self::Mirror,
             Some("dots") | Some("braille") => Self::Dots,
             Some("wave") | Some("waveform") | Some("scope") => Self::Wave,
+            Some("vu") | Some("vumeter") | Some("meter") => Self::Vu,
             _ => Self::Bars,
         }
     }
@@ -52,7 +55,8 @@ impl VisStyle {
             Self::Bars => Self::Mirror,
             Self::Mirror => Self::Dots,
             Self::Dots => Self::Wave,
-            Self::Wave => Self::Bars,
+            Self::Wave => Self::Vu,
+            Self::Vu => Self::Bars,
         }
     }
 
@@ -62,6 +66,7 @@ impl VisStyle {
             Self::Mirror => "mirror",
             Self::Dots => "dots",
             Self::Wave => "wave",
+            Self::Vu => "vu",
         }
     }
 }

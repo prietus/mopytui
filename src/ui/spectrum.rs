@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-//! Spectrum / waveform visualizer with four interchangeable styles, cycled at
+//! Spectrum / waveform / VU visualizer with five interchangeable styles, cycled at
 //! runtime with `v` (see [`crate::app::VisStyle`]). Mopidy doesn't expose
 //! audio samples to JSON-RPC clients, so when the audio FIFO/UDP/TCP reader
 //! isn't live we synthesise plausible band heights from `elapsed_ms` — the
@@ -26,7 +26,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         .title(Line::from(vec![
             Span::raw(" "),
             Span::styled(
-                "SPECTRUM",
+                if app.visualizer == VisStyle::Vu { "VU METER" } else { "SPECTRUM" },
                 Style::default()
                     .fg(app.theme.accent_alt)
                     .add_modifier(Modifier::BOLD),
@@ -59,6 +59,7 @@ pub fn render(f: &mut Frame, app: &App, area: Rect) {
         VisStyle::Mirror => render_mirror(f, app, inner),
         VisStyle::Dots => render_dots(f, app, inner),
         VisStyle::Wave => render_wave(f, app, inner),
+        VisStyle::Vu => render_vu(f, app, inner),
     }
 }
 
@@ -318,10 +319,198 @@ fn dot_bit(x: usize, y: usize) -> u8 {
 
 // ─── source label / pseudo / colour ────────────────────────────────────────
 
+// ─── vu meter ──────────────────────────────────────────────────────────────
+
+use crate::audio::{VU_MIN_DB, Vu};
+
+/// Position of `db` on the meter, `0.0` (scale minimum) to `1.0` (0 dBFS).
+fn vu_frac(db: f32) -> f64 {
+    ((db - VU_MIN_DB) / -VU_MIN_DB).clamp(0.0, 1.0) as f64
+}
+
+/// The glyphs of one meter bar `w` cells wide: full blocks up to the level
+/// (with a partial block for the fraction of a cell), a dim track after it,
+/// and a marker on the cell where the held peak sits.
+fn vu_cells(level: f64, peak: f64, w: usize) -> Vec<&'static str> {
+    const PARTIAL: [&str; 8] = ["░", "▏", "▎", "▍", "▌", "▋", "▊", "▉"];
+    let filled = level.clamp(0.0, 1.0) * w as f64;
+    let peak_cell = ((peak.clamp(0.0, 1.0) * w as f64).ceil() as usize).clamp(1, w.max(1)) - 1;
+    (0..w)
+        .map(|i| {
+            if (i + 1) as f64 <= filled {
+                "█"
+            } else if i == peak_cell && peak > 0.0 {
+                "┃"
+            } else if (i as f64) < filled {
+                PARTIAL[(((filled - i as f64) * 8.0) as usize).min(7)]
+            } else {
+                "░"
+            }
+        })
+        .collect()
+}
+
+/// Scale line under a bar of `w` cells: dB labels at their positions.
+fn vu_scale(w: usize) -> String {
+    let mut row = vec![' '; w];
+    for db in [-48.0_f32, -36.0, -24.0, -12.0, -6.0, -3.0, 0.0] {
+        let label = format!("{db:.0}");
+        let at = (vu_frac(db) * w as f64).round() as usize;
+        // Centre the label on its position, kept inside the row.
+        let start = at.saturating_sub(label.len() / 2).min(w.saturating_sub(label.len()));
+        if row[start..(start + label.len()).min(w)].iter().all(|c| *c == ' ')
+            && (start == 0 || row[start - 1] == ' ')
+        {
+            for (k, ch) in label.chars().enumerate() {
+                if start + k < w { row[start + k] = ch; }
+            }
+        }
+    }
+    row.into_iter().collect()
+}
+
+/// Levels to show: the real meter when audio is live, otherwise a gentle
+/// synthesised swing while playing (like the pseudo spectrum) or silence.
+fn vu_reading(app: &App) -> Vu {
+    if let Some(vu) = app.audio_reader.as_ref().and_then(|r| r.vu()) {
+        return vu;
+    }
+    if app.playback.state != PlayState::Playing {
+        return Vu { level: [VU_MIN_DB; 2], peak: [VU_MIN_DB; 2] };
+    }
+    let t = app.playback.elapsed_ms.max(0) as f32 * 0.001;
+    let ch = |phase: f32| -18.0 + 7.0 * (t * 3.1 + phase).sin() + 3.0 * (t * 7.7 + phase * 2.0).sin();
+    let level = [ch(0.0), ch(0.9)];
+    Vu { level, peak: [level[0] + 5.0, level[1] + 5.0] }
+}
+
+fn render_vu(f: &mut Frame, app: &App, inner: Rect) {
+    const LABEL_W: u16 = 2;
+    const READOUT_W: u16 = 10;
+    if inner.height < 3 || inner.width < LABEL_W + READOUT_W + 12 {
+        return;
+    }
+    let vu = vu_reading(app);
+    let bar_w = (inner.width - LABEL_W - READOUT_W) as usize;
+    let bar_h: u16 = if inner.height >= 7 { 2 } else { 1 };
+    let top = inner.y + (inner.height - (2 * bar_h + 1)) / 2;
+    // Green up to -12 dBFS, amber up to -3, red above.
+    let zone = |i: usize| {
+        let db = VU_MIN_DB + (i as f32 + 0.5) / bar_w as f32 * -VU_MIN_DB;
+        if db >= -3.0 { app.theme.err } else if db >= -12.0 { app.theme.warn } else { app.theme.ok }
+    };
+
+    for (ch, name) in ["L", "R"].into_iter().enumerate() {
+        let cells = vu_cells(vu_frac(vu.level[ch]), vu_frac(vu.peak[ch]), bar_w);
+        let readout = if vu.level[ch] <= VU_MIN_DB {
+            format!("{:>w$}", "-∞ dB", w = READOUT_W as usize)
+        } else {
+            format!("{:>w$}", format!("{:.1} dB", vu.level[ch]), w = READOUT_W as usize)
+        };
+        let y0 = top + ch as u16 * (bar_h + 1);
+        for dy in 0..bar_h {
+            let mut spans: Vec<Span> = Vec::with_capacity(bar_w + 2);
+            spans.push(Span::styled(
+                if dy == 0 { format!("{name} ") } else { "  ".to_string() },
+                Style::default().fg(app.theme.fg_strong).add_modifier(Modifier::BOLD),
+            ));
+            for (i, glyph) in cells.iter().enumerate() {
+                let style = match *glyph {
+                    "░" => Style::default().fg(app.theme.border),
+                    "┃" => Style::default().fg(app.theme.fg_strong).add_modifier(Modifier::BOLD),
+                    _ => Style::default().fg(zone(i)),
+                };
+                spans.push(Span::styled(*glyph, style));
+            }
+            if dy == 0 {
+                spans.push(Span::styled(readout.clone(), Style::default().fg(app.theme.fg_muted)));
+            }
+            let r = Rect { x: inner.x, y: y0 + dy, width: inner.width, height: 1 };
+            f.render_widget(Paragraph::new(Line::from(spans)), r);
+        }
+    }
+    // dB scale between the two bars.
+    let r = Rect { x: inner.x + LABEL_W, y: top + bar_h, width: bar_w as u16, height: 1 };
+    f.render_widget(
+        Paragraph::new(Span::styled(vu_scale(bar_w), Style::default().fg(app.theme.fg_muted))),
+        r,
+    );
+}
+
+#[cfg(test)]
+mod vu_tests {
+    use super::*;
+
+    #[test]
+    fn bar_fills_to_the_level_with_a_partial_cell_and_marks_the_peak() {
+        let cells = vu_cells(0.45, 0.8, 10).concat();
+        assert_eq!(cells, "████▌░░┃░░");
+        // Silence: empty track, no peak marker. Full scale: all blocks.
+        assert_eq!(vu_cells(0.0, 0.0, 6).concat(), "░░░░░░");
+        assert_eq!(vu_cells(1.0, 1.0, 6).concat(), "██████");
+        // A peak inside the filled part is hidden by the bar.
+        assert_eq!(vu_cells(0.5, 0.5, 4).concat(), "██░░");
+    }
+
+    #[test]
+    fn scale_puts_labels_at_their_positions_without_overlap() {
+        let s = vu_scale(96);
+        assert_eq!(s.chars().count(), 96);
+        assert!(s.starts_with("-48") && s.ends_with('0'));
+        for label in ["-36", "-24", "-12", "-6", "-3"] {
+            assert!(s.contains(label), "{label} missing in {s:?}");
+        }
+        // -24 dBFS is the middle of a -48..0 scale.
+        let mid = s.find("-24").unwrap() + 1;
+        assert!((47..=49).contains(&mid), "{mid}");
+        // Narrow bars drop labels instead of overlapping them.
+        let narrow = vu_scale(14);
+        assert_eq!(narrow.chars().count(), 14);
+        assert!(!narrow.contains("--") && !narrow.contains("-3-"));
+    }
+
+    #[test]
+    fn panel_shows_both_channels_the_scale_and_the_readouts() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+        let mut app = crate::app::App::new(
+            crate::config::AppConfig::default(),
+            crate::mopidy::Client::new("127.0.0.1", 6680),
+            std::sync::Arc::new(crate::images::ImageCache::new()),
+            ratatui_image::picker::Picker::halfblocks(),
+            None,
+        );
+        app.visualizer = VisStyle::Vu;
+        app.playback.state = PlayState::Playing;
+        app.playback.elapsed_ms = 12_345;
+        let mut term = Terminal::new(TestBackend::new(100, 10)).unwrap();
+        term.draw(|f| render(f, &app, f.area())).unwrap();
+        let buf = term.backend().buffer().clone();
+        let screen: Vec<String> = (0..10)
+            .map(|y| (0..100).map(|x| buf[(x, y)].symbol()).collect::<String>().trim_end().to_string())
+            .collect();
+        println!("{}", screen.join("\n"));
+        let all = screen.join("\n");
+        assert!(all.contains("VU METER") && all.contains("vu"));
+        assert!(screen.iter().any(|l| l.contains("L █")) && screen.iter().any(|l| l.contains("R █")));
+        assert!(all.contains("-48") && all.contains("-12") && all.contains(" dB"));
+    }
+
+    #[test]
+    fn db_maps_linearly_onto_the_meter() {
+        assert_eq!(vu_frac(VU_MIN_DB), 0.0);
+        assert_eq!(vu_frac(0.0), 1.0);
+        assert_eq!(vu_frac(-24.0), 0.5);
+        assert_eq!(vu_frac(6.0), 1.0);
+    }
+}
+
 fn spectrum_source_label(app: &App) -> &'static str {
+    // The VU meter reads levels, not an FFT.
+    let vu = app.visualizer == VisStyle::Vu;
     match app.audio_reader.as_ref() {
-        Some(r) if r.is_live() => "FFT (live)",
-        Some(_) => "FFT (no signal)",
+        Some(r) if r.is_live() => if vu { "live" } else { "FFT (live)" },
+        Some(_) => if vu { "no signal" } else { "FFT (no signal)" },
         None => "pseudo",
     }
 }

@@ -59,7 +59,7 @@ halfblocks** — detected at runtime.
   has [`mopidy-tidal-goodies`](https://github.com/yaragon/mopidy-tidal-goodies)
   installed.
 - **Spectrum visualizer** in the Queue view (`v` cycles bars · mirror · dots ·
-  wave). With the visualizer feed of
+  wave · vu — a stereo VU meter with peak hold). With the visualizer feed of
   [`mopidy-goodies`](https://github.com/prietus/mopidy-goodies) set up on the
   server it shows the real audio (FFT of the PCM stream, picked up over
   WebSocket with no client configuration); otherwise it is a synthesised

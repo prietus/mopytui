@@ -41,7 +41,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub visualizer_delay_ms: Option<u32>,
     /// Default visualizer style for the spectrum panel: `bars`, `mirror`,
-    /// `dots`, or `wave`. Cycled at runtime with `v`.
+    /// `dots`, `wave` or `vu`. Cycled at runtime with `v`.
     #[serde(default)]
     pub visualizer_style: Option<String>,
     #[serde(default)]
@@ -117,6 +117,7 @@ mpris = false
 # mirror — bars mirrored above/below a centre axis
 # dots   — FFT bars in braille sub-pixels (2× horizontal × 4× vertical)
 # wave   — raw PCM waveform (braille line plot)
+# vu     — stereo VU meter (level bar per channel with peak hold, in dBFS)
 # visualizer_style = "bars"
 
 # Optional API keys for richer metadata.
