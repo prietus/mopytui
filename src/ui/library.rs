@@ -34,7 +34,6 @@ fn render_entries(f: &mut Frame, app: &mut App, area: Rect) {
         }
     };
 
-    let favs = &app.goodies.favorites;
     let items: Vec<ListItem> = app
         .library
         .entries
@@ -48,10 +47,7 @@ fn render_entries(f: &mut Frame, app: &mut App, area: Rect) {
                 "track" => "·",
                 _ => " ",
             };
-            let star = match crate::app::tidal_album_id(&e.uri) {
-                Some(id) if favs.contains(id) => "★ ",
-                _ => "  ",
-            };
+            let star = if app.goodies.is_favorite(&e.uri) { "★ " } else { "  " };
             ListItem::new(Line::from(vec![
                 crate::ui::chips::source_chip(&e.uri, &app.theme),
                 Span::styled(format!(" {icon} "), Style::default().fg(app.theme.accent_alt)),

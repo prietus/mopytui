@@ -400,6 +400,9 @@ pub struct GoodiesState {
     pub totals: Option<serde_json::Value>,
     /// Tidal album IDs the user has favorited via goodies.
     pub favorites: std::collections::HashSet<String>,
+    /// Tidal track / artist IDs in the user's favorites ("My Tracks", "My Artists").
+    pub favorite_tracks: std::collections::HashSet<String>,
+    pub favorite_artists: std::collections::HashSet<String>,
     /// Time window applied to every stats tab except Recent.
     pub period: GoodiesPeriod,
 }
@@ -510,6 +513,32 @@ pub struct GoodiesItem {
 /// `tidal_goodies` HTTP endpoint expects). `tidal:album:12345` → `12345`.
 pub fn tidal_album_id(uri: &str) -> Option<&str> {
     uri.strip_prefix("tidal:album:")
+}
+
+/// Bare Tidal track id: `tidal:track:<artist>:<album>:<track>` → `<track>`.
+pub fn tidal_track_id(uri: &str) -> Option<&str> {
+    uri.strip_prefix("tidal:track:")
+        .and_then(|rest| rest.rsplit(':').next())
+        .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// Bare Tidal artist id: `tidal:artist:<id>` → `<id>`.
+pub fn tidal_artist_id(uri: &str) -> Option<&str> {
+    uri.strip_prefix("tidal:artist:")
+        .filter(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+}
+
+impl GoodiesState {
+    /// Whether a Tidal album, track or artist URI is in the user's favorites.
+    pub fn is_favorite(&self, uri: &str) -> bool {
+        if let Some(id) = tidal_track_id(uri) {
+            self.favorite_tracks.contains(id)
+        } else if let Some(id) = tidal_artist_id(uri) {
+            self.favorite_artists.contains(id)
+        } else {
+            tidal_album_id(uri).is_some_and(|id| self.favorites.contains(id))
+        }
+    }
 }
 
 #[derive(Default)]
@@ -869,6 +898,8 @@ pub enum Cmd {
     LoadGoodies,
     FetchCover(String),
     ToggleFavoriteAlbum(String),
+    /// Add/remove a Tidal track or artist (or album) to/from the favorites.
+    ToggleFavorite(String),
     /// Queue a Tidal radio seeded from a track or artist URI (goodies).
     StartRadio(String),
     /// Open the Tidal login link in the local browser.
@@ -880,3 +911,33 @@ pub enum Cmd {
     QueueAlbum(String),
 }
 
+#[cfg(test)]
+mod favorite_tests {
+    use super::*;
+
+    #[test]
+    fn tidal_ids_come_from_the_right_part_of_each_uri() {
+        assert_eq!(tidal_track_id("tidal:track:8992:534050382:534050397"), Some("534050397"));
+        assert_eq!(tidal_artist_id("tidal:artist:8992"), Some("8992"));
+        assert_eq!(tidal_album_id("tidal:album:534050382"), Some("534050382"));
+        // Not Tidal, wrong kind, or mopidy-tidal's fake login item.
+        assert_eq!(tidal_track_id("local:track:a/b.flac"), None);
+        assert_eq!(tidal_track_id("tidal:track:login"), None);
+        assert_eq!(tidal_artist_id("tidal:artist:login"), None);
+        assert_eq!(tidal_artist_id("tidal:album:1"), None);
+    }
+
+    #[test]
+    fn is_favorite_looks_in_the_set_for_the_uri_kind() {
+        let mut g = GoodiesState::default();
+        g.favorites.insert("1".into());
+        g.favorite_tracks.insert("2".into());
+        g.favorite_artists.insert("3".into());
+        assert!(g.is_favorite("tidal:album:1"));
+        assert!(g.is_favorite("tidal:track:9:9:2"));
+        assert!(g.is_favorite("tidal:artist:3"));
+        // The same id under another kind is not a favorite.
+        assert!(!g.is_favorite("tidal:artist:1") && !g.is_favorite("tidal:album:3"));
+        assert!(!g.is_favorite("local:track:x"));
+    }
+}

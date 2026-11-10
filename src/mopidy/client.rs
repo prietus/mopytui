@@ -524,10 +524,12 @@ impl Client {
         Ok(Some(resp.error_for_status()?.json().await?))
     }
 
-    pub async fn goodies_favorite_album_ids(&self) -> Result<Option<Vec<String>>> {
+    /// Ids of the user's Tidal favorites of one kind (`albums`, `tracks`,
+    /// `artists`). `Ok(None)` when goodies isn't installed.
+    pub async fn goodies_favorite_ids(&self, kind: &str) -> Result<Option<Vec<String>>> {
         let resp = self
             .inner
-            .get(self.goodies_url("/favorites/albums"))
+            .get(self.goodies_url(&format!("/favorites/{kind}")))
             .send()
             .await?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
@@ -537,16 +539,17 @@ impl Client {
         Ok(Some(items.into_iter().map(|i| i.id).collect()))
     }
 
-    pub async fn goodies_set_album_favorite(&self, id: &str, favorited: bool) -> Result<bool> {
+    /// Add or remove a Tidal favorite. `Ok(false)` when goodies isn't installed.
+    pub async fn goodies_set_favorite(&self, kind: &str, id: &str, favorited: bool) -> Result<bool> {
         let resp = if favorited {
             self.inner
-                .post(self.goodies_url("/favorites/albums"))
+                .post(self.goodies_url(&format!("/favorites/{kind}")))
                 .json(&json!({ "id": id }))
                 .send()
                 .await?
         } else {
             self.inner
-                .delete(self.goodies_url(&format!("/favorites/albums/{id}")))
+                .delete(self.goodies_url(&format!("/favorites/{kind}/{id}")))
                 .send()
                 .await?
         };

@@ -184,6 +184,8 @@ mpris = false       # Linux only
 |           | `p` (album row)    | Play album                              |
 |           | `a` (album row)    | Queue album                             |
 |           | `f` (album / track row) | Add / remove the album to / from your Tidal library |
+|           | `f` (artist row)   | Add / remove the artist to / from your Tidal favorites |
+|           | `F` (track)        | Add / remove the track to / from your Tidal favorites (also in Queue, Library, album detail and Now Playing) |
 | Queue     | `↑↓` / `jk`        | Move selection                          |
 |           | `Enter`            | Play this entry                         |
 |           | `d` / `Del`        | Remove                                  |

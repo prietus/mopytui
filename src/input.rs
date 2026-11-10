@@ -137,6 +137,11 @@ fn handle_albums_detail(app: &mut App, key: KeyEvent) -> Cmd {
         KeyCode::Char('p') => Cmd::PlayAlbum(detail.card.uri.clone()),
         KeyCode::Char('a') => Cmd::QueueAlbum(detail.card.uri.clone()),
         KeyCode::Char('f') => Cmd::ToggleFavoriteAlbum(detail.card.uri.clone()),
+        KeyCode::Char('F') => detail
+            .tracks
+            .get(detail.track_index)
+            .map(|t| Cmd::ToggleFavorite(t.uri.clone()))
+            .unwrap_or(Cmd::None),
         KeyCode::Char('o') => detail
             .tracks
             .get(detail.track_index)
@@ -313,7 +318,28 @@ fn handle_library(app: &mut App, key: KeyEvent) -> Cmd {
             {
                 return Cmd::ToggleFavoriteAlbum(e.uri.clone());
             }
+            // …or the selected artist.
+            if app.library.focus == LibraryFocus::Entries
+                && let Some(i) = app.library.entries_state.selected()
+                && let Some(e) = app.library.entries.get(i)
+                && e.kind == "artist"
+            {
+                return Cmd::ToggleFavorite(e.uri.clone());
+            }
             Cmd::None
+        }
+        KeyCode::Char('F') => {
+            // Favorite the selected track (either pane).
+            let uri = match app.library.focus {
+                LibraryFocus::Entries => app.library.entries_state.selected()
+                    .and_then(|i| app.library.entries.get(i))
+                    .filter(|e| e.kind == "track")
+                    .map(|e| e.uri.clone()),
+                LibraryFocus::Tracks => app.library.album_tracks.as_ref()
+                    .and_then(|v| v.get(app.library.album_tracks_state.selected().unwrap_or(0)))
+                    .map(|t| t.uri.clone()),
+            };
+            uri.map(Cmd::ToggleFavorite).unwrap_or(Cmd::None)
         }
         KeyCode::Char('o') => {
             let uri = match app.library.focus {
@@ -459,6 +485,10 @@ fn handle_queue(app: &mut App, key: KeyEvent) -> Cmd {
                 .and_then(|a| a.uri.clone())
                 .map(Cmd::ToggleFavoriteAlbum)
                 .unwrap_or(Cmd::None)
+        }
+        KeyCode::Char('F') => {
+            let Some(i) = app.queue_state.table.selected() else { return Cmd::None };
+            app.queue.get(i).map(|t| Cmd::ToggleFavorite(t.track.uri.clone())).unwrap_or(Cmd::None)
         }
         KeyCode::Char('o') => {
             let Some(i) = app.queue_state.table.selected() else { return Cmd::None };
@@ -618,6 +648,11 @@ fn handle_search(app: &mut App, key: KeyEvent) -> Cmd {
                     .and_then(|h| h.detail_key())
                     .map(Cmd::ToggleFavoriteAlbum)
                     .unwrap_or(Cmd::None),
+                KeyCode::Char('F') => app
+                    .search
+                    .selected_detail_track()
+                    .map(|t| Cmd::ToggleFavorite(t.uri.clone()))
+                    .unwrap_or(Cmd::None),
                 _ => Cmd::None,
             }
         }
@@ -687,6 +722,11 @@ fn handle_search(app: &mut App, key: KeyEvent) -> Cmd {
                     Some(SearchHit::Album(a)) => a.uri.clone().map(Cmd::ToggleFavoriteAlbum).unwrap_or(Cmd::None),
                     Some(SearchHit::Track(t)) => t.album.as_ref().and_then(|al| al.uri.clone())
                         .map(Cmd::ToggleFavoriteAlbum).unwrap_or(Cmd::None),
+                    Some(SearchHit::Artist(a)) => a.uri.clone().map(Cmd::ToggleFavorite).unwrap_or(Cmd::None),
+                    None => Cmd::None,
+                },
+                KeyCode::Char('F') => match app.search.selected_hit() {
+                    Some(SearchHit::Track(t)) => Cmd::ToggleFavorite(t.uri.clone()),
                     _ => Cmd::None,
                 },
                 KeyCode::Char('o') => match app.search.selected_hit() {
@@ -815,6 +855,12 @@ fn handle_now_playing(app: &App, key: KeyEvent) -> Cmd {
                 .map(Cmd::ToggleFavoriteAlbum)
                 .unwrap_or(Cmd::None)
         }
+        KeyCode::Char('F') => app
+            .playback
+            .current
+            .as_ref()
+            .map(|t| Cmd::ToggleFavorite(t.uri.clone()))
+            .unwrap_or(Cmd::None),
         _ => Cmd::None,
     }
 }

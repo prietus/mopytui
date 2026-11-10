@@ -109,6 +109,7 @@ pub async fn apply(app: &mut App, cmd: Cmd) -> Result<()> {
         Cmd::LoadGoodies => load_goodies(app).await,
         Cmd::FetchCover(uri) => fetch_cover_async(app, uri),
         Cmd::ToggleFavoriteAlbum(uri) => toggle_favorite_album(app, uri).await,
+        Cmd::ToggleFavorite(uri) => toggle_favorite(app, uri).await,
         Cmd::StartRadio(uri) => start_radio(app, uri).await,
         Cmd::OpenTidalLogin => open_tidal_login(app),
         Cmd::LoadAlbums => load_albums(app).await,
@@ -1385,11 +1386,53 @@ pub async fn start_radio(app: &mut App, uri: String) {
 }
 
 pub async fn load_favorites(app: &mut App) {
-    match app.client.goodies_favorite_album_ids().await {
-        Ok(Some(ids)) => {
-            app.goodies.favorites = ids.into_iter().collect();
+    let (albums, tracks, artists) = tokio::join!(
+        app.client.goodies_favorite_ids("albums"),
+        app.client.goodies_favorite_ids("tracks"),
+        app.client.goodies_favorite_ids("artists"),
+    );
+    if let Ok(Some(ids)) = albums {
+        app.goodies.favorites = ids.into_iter().collect();
+    }
+    if let Ok(Some(ids)) = tracks {
+        app.goodies.favorite_tracks = ids.into_iter().collect();
+    }
+    if let Ok(Some(ids)) = artists {
+        app.goodies.favorite_artists = ids.into_iter().collect();
+    }
+}
+
+/// Add/remove a Tidal track or artist to/from the user's favorites ("My
+/// Tracks" / "My Artists" under Library › Tidal). Albums go through
+/// [`toggle_favorite_album`], which also keeps the Albums grid in sync.
+pub async fn toggle_favorite(app: &mut App, uri: String) {
+    let (kind, what, id) = if let Some(id) = crate::app::tidal_track_id(&uri) {
+        ("tracks", "track", id.to_string())
+    } else if let Some(id) = crate::app::tidal_artist_id(&uri) {
+        ("artists", "artist", id.to_string())
+    } else if crate::app::tidal_album_id(&uri).is_some() {
+        return toggle_favorite_album(app, uri).await;
+    } else {
+        app.status.flash("favorites are for Tidal tracks, artists and albums", crate::app::StatusKind::Warn);
+        return;
+    };
+    let next = !app.goodies.is_favorite(&uri);
+    match app.client.goodies_set_favorite(kind, &id, next).await {
+        Ok(true) => {
+            let set = if kind == "tracks" { &mut app.goodies.favorite_tracks } else { &mut app.goodies.favorite_artists };
+            if next {
+                set.insert(id);
+                app.status.flash(format!("★ {what} added to your Tidal favorites"), crate::app::StatusKind::Ok);
+            } else {
+                set.remove(&id);
+                app.status.flash(format!("{what} removed from your Tidal favorites"), crate::app::StatusKind::Info);
+            }
         }
-        _ => {}
+        Ok(false) => app.status.flash(
+            "goodies plugin not installed on the server",
+            crate::app::StatusKind::Warn,
+        ),
+        Err(e) => app.status.flash(format!("favorite: {}", e.0), crate::app::StatusKind::Err),
     }
 }
 
@@ -1401,7 +1444,7 @@ pub async fn toggle_favorite_album(app: &mut App, uri: String) {
     let id = id.to_string();
     let currently = app.goodies.favorites.contains(&id);
     let next = !currently;
-    match app.client.goodies_set_album_favorite(&id, next).await {
+    match app.client.goodies_set_favorite("albums", &id, next).await {
         Ok(true) => {
             if next {
                 app.goodies.favorites.insert(id);

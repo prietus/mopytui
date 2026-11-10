@@ -331,7 +331,11 @@ fn render_results(f: &mut Frame, app: &mut App, area: Rect) {
             ))),
             SearchRow::Hit(i) => match &app.search.flat[*i] {
                 SearchHit::Track(t) => ListItem::new(Line::from(vec![
-                    Span::styled("    ♪ ", Style::default().fg(app.theme.accent)),
+                    Span::styled(
+                        if app.goodies.is_favorite(&t.uri) { "  ★ " } else { "    " },
+                        Style::default().fg(app.theme.warn).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("♪ ", Style::default().fg(app.theme.accent)),
                     Span::styled(
                         t.name.clone(),
                         Style::default().fg(app.theme.fg_strong).add_modifier(Modifier::BOLD),
@@ -370,7 +374,11 @@ fn render_results(f: &mut Frame, app: &mut App, area: Rect) {
                     ]))
                 }
                 SearchHit::Artist(a) => ListItem::new(Line::from(vec![
-                    Span::styled("    ▲ ", Style::default().fg(app.theme.warn)),
+                    Span::styled(
+                        if a.uri.as_deref().is_some_and(|u| app.goodies.is_favorite(u)) { "  ★ " } else { "    " },
+                        Style::default().fg(app.theme.warn).add_modifier(Modifier::BOLD),
+                    ),
+                    Span::styled("▲ ", Style::default().fg(app.theme.warn)),
                     Span::styled(
                         a.name.clone(),
                         Style::default().fg(app.theme.fg_strong).add_modifier(Modifier::BOLD),
@@ -641,6 +649,7 @@ fn action_spans(app: &App, hit: &SearchHit, in_tracks: bool) -> Vec<Span<'static
     if in_tracks {
         out.extend(key("Enter", "add track"));
         out.extend(key("o", "radio"));
+        out.extend(key("F", "fav track"));
         out.extend(key("f", "library"));
         out.extend(key("h", "back"));
         return out;
@@ -656,12 +665,14 @@ fn action_spans(app: &App, hit: &SearchHit, in_tracks: bool) -> Vec<Span<'static
         SearchHit::Track(_) => {
             out.extend(key("Enter", "add"));
             out.extend(key("o", "radio"));
+            out.extend(key("F", "favorite"));
             out.extend(key("f", "library"));
             out.extend(key("→", "album tracks"));
         }
         SearchHit::Artist(_) => {
             out.extend(key("Enter", "browse"));
             out.extend(key("o", "radio"));
+            out.extend(key("f", "favorite"));
         }
     }
     out
@@ -806,5 +817,36 @@ mod tests {
         app.search.detail_state.select(Some(0));
         let s = screen(&mut app, 140, 40);
         assert!(s.contains("Song One") && s.contains("[Enter] add track") && s.contains("[h] back"));
+    }
+
+    #[test]
+    fn f_on_an_artist_and_shift_f_on_a_track_toggle_their_own_favorites() {
+        use crate::app::Cmd;
+        use crossterm::event::KeyCode;
+        let mut app = app_with_results();
+        // Rows: Tidal album, Tidal artist, local track (see app_with_results).
+        assert!(matches!(
+            crate::input::handle_key(&mut app, key(KeyCode::Char('F'))),
+            Cmd::None
+        ), "F does nothing on an album row");
+        app.search.select_hit_delta(1);
+        let cmd = crate::input::handle_key(&mut app, key(KeyCode::Char('f')));
+        assert!(matches!(cmd, Cmd::ToggleFavorite(u) if u == "tidal:artist:9"));
+        app.search.select_hit_delta(1);
+        let cmd = crate::input::handle_key(&mut app, key(KeyCode::Char('F')));
+        assert!(matches!(cmd, Cmd::ToggleFavorite(u) if u == "local:track:a"));
+        // f on a track row still means "its album".
+        let cmd = crate::input::handle_key(&mut app, key(KeyCode::Char('f')));
+        assert!(matches!(cmd, Cmd::ToggleFavoriteAlbum(u) if u == "local:album:md5:x"));
+    }
+
+    #[test]
+    fn favorite_artists_and_tracks_get_a_star_in_the_results() {
+        let mut app = app_with_results();
+        let plain = screen(&mut app, 140, 40);
+        assert!(!plain.contains("★ ▲"));
+        app.goodies.favorite_artists.insert("9".into());
+        let starred = screen(&mut app, 140, 40);
+        assert!(starred.contains("★ ▲ Santana"), "{starred}");
     }
 }
