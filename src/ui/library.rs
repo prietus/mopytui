@@ -88,12 +88,12 @@ fn render_right(f: &mut Frame, app: &mut App, area: Rect) {
     let Some(tracks) = app.library.album_tracks.clone() else {
         let p = Paragraph::new(vec![
             Line::from(Span::styled(
-                "Select an album",
+                "Select an album, playlist or mix",
                 Style::default().fg(app.theme.fg_muted),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "Enter on a directory to descend, on an album to load its tracks.",
+                "Enter on a directory to descend, on an album, playlist or mix to load its tracks.",
                 Style::default().fg(app.theme.fg_muted),
             )),
         ])

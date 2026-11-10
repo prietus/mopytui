@@ -336,10 +336,38 @@ pub async fn browse_up(app: &mut App) {
     browse_into(app, uri, name).await;
 }
 
+/// Tidal URIs that hold a list of tracks but aren't albums: playlists and
+/// mixes ("My Mix 1", "My Daily Discovery"…). `library.lookup` returns nothing
+/// (mixes) or null placeholders (editorial playlists) for them; the playlists
+/// provider and `library.browse` do resolve them.
+fn is_tidal_tracklist(uri: &str) -> bool {
+    uri.starts_with("tidal:playlist:") || uri.starts_with("tidal:mix:")
+}
+
+/// Tracks of a playlist or mix through the playlists provider.
+async fn playlist_tracks(app: &App, uri: &str) -> crate::mopidy::client::Result<Vec<Track>> {
+    let tracks = app.client.playlist_lookup(uri).await?.map(|p| p.tracks).unwrap_or_default();
+    Ok(tracks.into_iter().filter(|t| !is_unresolved_placeholder(t)).collect())
+}
+
+/// Load the tracks of an album — or of a playlist / mix reached while
+/// browsing — into the Library's track pane.
 pub async fn open_album(app: &mut App, uri: String) {
-    match app.client.lookup(vec![uri.clone()]).await {
+    let looked_up = if is_tidal_tracklist(&uri) {
+        playlist_tracks(app, &uri).await.map(|tracks| {
+            let mut map = std::collections::HashMap::new();
+            map.insert(uri.clone(), tracks);
+            map
+        })
+    } else {
+        app.client.lookup(vec![uri.clone()]).await
+    };
+    match looked_up {
         Ok(mut map) => {
             let tracks = map.remove(&uri).unwrap_or_default();
+            if tracks.is_empty() {
+                app.status.flash("no tracks found here", crate::app::StatusKind::Warn);
+            }
             app.library.album_tracks_state = ListState::default();
             if !tracks.is_empty() {
                 app.library.album_tracks_state.select(Some(0));
@@ -470,7 +498,7 @@ fn is_unresolved_placeholder(t: &Track) -> bool {
 async fn expand_tidal_playlists(app: &App, uris: Vec<String>) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(uris.len());
     for uri in uris {
-        if uri.starts_with("tidal:playlist:") {
+        if is_tidal_tracklist(&uri) {
             match app.client.browse(Some(uri.clone())).await {
                 Ok(refs) => {
                     let tracks: Vec<String> = refs
@@ -1515,3 +1543,47 @@ fn parse_goodies(v: &serde_json::Value) -> Vec<crate::app::GoodiesItem> {
         .collect()
 }
 
+
+#[cfg(test)]
+mod tidal_tracklist_tests {
+    use super::*;
+
+    #[test]
+    fn playlists_and_mixes_are_tracklists_albums_are_not() {
+        assert!(is_tidal_tracklist("tidal:mix:0022ed081bc0f608165ce3ac9a891d"));
+        assert!(is_tidal_tracklist("tidal:playlist:36ea71a8-445e-41a4-82ab-6628c581535d"));
+        assert!(!is_tidal_tracklist("tidal:album:123"));
+        assert!(!is_tidal_tracklist("tidal:mixes"));
+        assert!(!is_tidal_tracklist("local:album:md5:x"));
+    }
+
+    /// Manual check against a real server with mopidy-tidal logged in:
+    /// `MOPYTUI_HOST=192.168.1.10 cargo test live_mix -- --ignored --nocapture`
+    #[tokio::test]
+    #[ignore]
+    async fn live_mix_opens_in_the_library_and_expands_for_the_queue() {
+        let host = std::env::var("MOPYTUI_HOST").expect("set MOPYTUI_HOST");
+        let client = crate::mopidy::Client::new(&host, 6680);
+        let mut app = App::new(
+            crate::config::AppConfig::default(),
+            client,
+            std::sync::Arc::new(crate::images::ImageCache::new()),
+            ratatui_image::picker::Picker::halfblocks(),
+            None,
+        );
+        let mixes = app.client.browse(Some("tidal:mixes".into())).await.expect("browse mixes");
+        let mix = mixes.iter().find(|r| r.uri.starts_with("tidal:mix:")).expect("a mix");
+        println!("mix: {} ({})", mix.name, mix.kind);
+        assert_eq!(mix.kind, "playlist");
+
+        open_album(&mut app, mix.uri.clone()).await;
+        let tracks = app.library.album_tracks.clone().unwrap_or_default();
+        println!("tracks in pane: {} — first: {:?}", tracks.len(), tracks.first().map(|t| (&t.name, t.artists_joined())));
+        assert!(!tracks.is_empty(), "mix must list its tracks");
+        assert_eq!(app.library.focus, crate::app::LibraryFocus::Tracks);
+
+        let uris = expand_tidal_playlists(&app, vec![mix.uri.clone()]).await;
+        println!("expanded for the queue: {} track uris", uris.len());
+        assert!(uris.len() > 1 && uris.iter().all(|u| u.starts_with("tidal:track:")));
+    }
+}

@@ -383,7 +383,10 @@ fn library_open_selected(app: &mut App) -> Cmd {
                 }
                 "album" => Cmd::OpenAlbum(e.uri),
                 "track" => Cmd::Add(vec![e.uri]),
-                "playlist" => Cmd::OpenPlaylist(e.uri),
+                // Playlists and mixes found while browsing open in this
+                // view's track pane, like albums (`OpenPlaylist` loads them
+                // into the Playlists view, which isn't on screen here).
+                "playlist" => Cmd::OpenAlbum(e.uri),
                 _ => Cmd::None,
             }
         }
