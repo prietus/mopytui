@@ -148,12 +148,14 @@ fn render_lyrics(f: &mut Frame, app: &App, area: Rect) {
         .and_then(|k| app.lyrics_cache.get(k));
     let fetch_done = cache_state.is_some();
     let title_text = match app.lyrics.as_ref() {
-        Some(l) if l.has_synced() => "♬ Lyrics",
-        Some(l) if l.instrumental => "♬ Instrumental",
-        Some(_) => "♬ Lyrics",
-        None if app.playback.current.is_none() => "♬ Lyrics",
-        None if fetch_done => "♬ Lyrics  ·  not found",
-        None => "♬ Lyrics  ·  fetching…",
+        Some(l) if l.instrumental && !l.has_text() => "♬ Instrumental".to_string(),
+        Some(l) => match &l.source {
+            Some(src) => format!("♬ Lyrics  ·  {src}"),
+            None => "♬ Lyrics".to_string(),
+        },
+        None if app.playback.current.is_none() => "♬ Lyrics".to_string(),
+        None if fetch_done => "♬ Lyrics  ·  not found".to_string(),
+        None => "♬ Lyrics  ·  fetching…".to_string(),
     };
     let block = Block::default()
         .borders(Borders::ALL)
@@ -177,9 +179,9 @@ fn render_lyrics(f: &mut Frame, app: &App, area: Rect) {
         let msg = if app.playback.current.is_none() {
             "no track playing"
         } else if fetch_done {
-            "no lyrics found on lrclib.net"
+            "no lyrics found (lrclib.net, Tidal)"
         } else if app.lyrics_key.is_some() {
-            "looking up lyrics on lrclib.net…"
+            "looking up lyrics…"
         } else {
             "lyrics unavailable for this track"
         };
@@ -207,7 +209,7 @@ fn render_lyrics(f: &mut Frame, app: &App, area: Rect) {
     if !lyrics.has_text() {
         f.render_widget(
             Paragraph::new(Span::styled(
-                "no lyrics found on lrclib.net",
+                "no lyrics found (lrclib.net, Tidal)",
                 Style::default().fg(app.theme.fg_muted),
             )),
             inner,

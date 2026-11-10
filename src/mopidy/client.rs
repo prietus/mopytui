@@ -602,6 +602,24 @@ impl Client {
         Ok(Some(TidalText { text: text.to_string(), source: get("source"), image: get("image") }))
     }
 
+    /// Tidal's lyrics for a track URI (Tidal or local) via goodies. `Ok(None)`
+    /// when Tidal has none or the server's goodies predates the endpoint.
+    pub async fn goodies_lyrics(&self, uri: &str) -> Result<Option<crate::lyrics::ParsedLyrics>> {
+        let resp = self
+            .inner
+            .get(self.goodies_url("/tidal/lyrics"))
+            .query(&[("uri", uri)])
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        let v: Value = resp.json().await?;
+        let s = |k: &str| v.get(k).and_then(|x| x.as_str());
+        let lyrics = crate::lyrics::from_tidal(s("text"), s("subtitles"), s("provider"));
+        Ok(lyrics.has_text().then_some(lyrics))
+    }
+
     pub async fn goodies_album_review(&self, id: &str) -> Result<Option<TidalText>> {
         self.goodies_text(&format!("/tidal/albums/{id}/review")).await
     }

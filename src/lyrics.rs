@@ -14,6 +14,38 @@ pub struct ParsedLyrics {
     pub synced: Vec<(i64, String)>,  // (ms, line)
     pub plain: Option<String>,
     pub instrumental: bool,
+    /// Where they came from, for the panel title: "lrclib", "Tidal (MUSIXMATCH)"…
+    pub source: Option<String>,
+}
+
+/// Where to ask for Tidal's lyrics when lrclib has none (or only unsynced
+/// text): mopidy-goodies on the Mopidy server, by the track's Mopidy URI.
+pub struct TidalSource {
+    pub client: crate::mopidy::Client,
+    pub uri: String,
+}
+
+/// Lyrics from goodies' `/tidal/lyrics` payload: `subtitles` is LRC (line
+/// timestamps), `text` the plain version.
+pub fn from_tidal(text: Option<&str>, subtitles: Option<&str>, provider: Option<&str>) -> ParsedLyrics {
+    ParsedLyrics {
+        synced: subtitles.map(parse_synced).unwrap_or_default(),
+        plain: text.map(str::trim).filter(|s| !s.is_empty()).map(String::from),
+        instrumental: false,
+        source: Some(match provider.filter(|p| !p.is_empty()) {
+            Some(p) => format!("Tidal ({p})"),
+            None => "Tidal".to_string(),
+        }),
+    }
+}
+
+/// Whether `candidate` is worth showing instead of `current`: anything beats
+/// nothing, and line-synced lyrics beat plain text.
+fn is_better(candidate: &ParsedLyrics, current: Option<&ParsedLyrics>) -> bool {
+    match current {
+        None => candidate.has_text(),
+        Some(cur) => candidate.has_synced() && !cur.has_synced(),
+    }
 }
 
 impl ParsedLyrics {
@@ -48,6 +80,7 @@ impl LrclibResp {
             synced: self.synced_lyrics.as_deref().map(parse_synced).unwrap_or_default(),
             plain: self.plain_lyrics.filter(|s| !s.is_empty()),
             instrumental: self.instrumental,
+            source: Some("lrclib".to_string()),
         }
     }
 }
@@ -146,6 +179,7 @@ pub async fn fetch_for(
     title: &str,
     album: &str,
     duration_ms: i64,
+    tidal: Option<TidalSource>,
 ) -> Result<Option<Arc<ParsedLyrics>>> {
     if artist.trim().is_empty() || title.trim().is_empty() {
         return Ok(None);
@@ -194,11 +228,26 @@ pub async fn fetch_for(
         }
     }
 
+    // Tidal's own lyrics as a second source, when lrclib has nothing or only
+    // unsynced text.
+    if result.as_deref().is_none_or(|p| !p.has_synced())
+        && let Some(src) = tidal
+    {
+        match src.client.goodies_lyrics(&src.uri).await {
+            Ok(Some(t)) if is_better(&t, result.as_deref()) => {
+                tracing::debug!(target: "mopytui::lyrics", "using Tidal lyrics (synced: {})", t.has_synced());
+                result = Some(Arc::new(t));
+            }
+            Ok(_) => tracing::debug!(target: "mopytui::lyrics", "no (better) lyrics on Tidal"),
+            Err(e) => tracing::debug!(target: "mopytui::lyrics", "Tidal lyrics: {}", e.0),
+        }
+    }
+
     match &result {
         Some(p) if p.has_synced() => tracing::debug!(target: "mopytui::lyrics", "synced lyrics found"),
         Some(p) if p.instrumental => tracing::debug!(target: "mopytui::lyrics", "instrumental"),
         Some(_) => tracing::debug!(target: "mopytui::lyrics", "plain lyrics found"),
-        None => tracing::debug!(target: "mopytui::lyrics", "no lyrics on lrclib (after retries)"),
+        None => tracing::debug!(target: "mopytui::lyrics", "no lyrics found (after retries)"),
     }
     cache.put(key, result.clone());
     Ok(result)
@@ -252,3 +301,41 @@ async fn fetch_search(
     Ok(arr.into_iter().next().map(|r| r.parse()))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tidal_subtitles_become_synced_lines_and_carry_the_provider() {
+        let l = from_tidal(
+            Some("Is this the real life?\nIs this just fantasy?"),
+            Some("[00:00.50] Is this the real life?\n[00:04.10] Is this just fantasy?"),
+            Some("MUSIXMATCH"),
+        );
+        assert_eq!(l.synced.len(), 2);
+        assert_eq!(l.synced[1].0, 4100);
+        assert_eq!(l.synced[1].1, "Is this just fantasy?");
+        assert_eq!(l.source.as_deref(), Some("Tidal (MUSIXMATCH)"));
+        assert_eq!(l.current_line(4200), Some(1));
+        // Plain-only payload.
+        let plain = from_tidal(Some(" just text "), None, None);
+        assert!(!plain.has_synced() && plain.has_text());
+        assert_eq!(plain.source.as_deref(), Some("Tidal"));
+        assert!(!from_tidal(None, None, None).has_text());
+    }
+
+    #[test]
+    fn tidal_replaces_lrclib_only_when_it_adds_something() {
+        let synced = from_tidal(Some("a"), Some("[00:01.00] a"), None);
+        let plain = from_tidal(Some("a"), None, None);
+        let empty = from_tidal(None, None, None);
+        // Nothing from lrclib: any text wins, an empty answer doesn't.
+        assert!(is_better(&plain, None) && is_better(&synced, None));
+        assert!(!is_better(&empty, None));
+        // lrclib had plain text only: Tidal's synced lines win, plain doesn't.
+        assert!(is_better(&synced, Some(&plain)));
+        assert!(!is_better(&plain, Some(&plain)));
+        // lrclib already synced: keep it.
+        assert!(!is_better(&synced, Some(&synced)));
+    }
+}

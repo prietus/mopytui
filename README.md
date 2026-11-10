@@ -47,7 +47,9 @@ halfblocks** — detected at runtime.
   `core.library.get_images`, pre-resized to fill the panel cleanly and
   rendered via the best protocol your terminal supports.
 - **Synced lyrics** from [lrclib.net](https://lrclib.net) with the active
-  line highlighted in real time (toggle with `L`).
+  line highlighted in real time (toggle with `L`). When lrclib has none, or
+  only unsynced text, Tidal's own lyrics are used instead (needs goodies'
+  `/tidal/lyrics`; works for local files it can match to Tidal too).
 - **Audio chip** — live sample rate / bit depth / channels from
   `mopidy-mpd`'s `status:audio` (bit-perfect verification).
 - **Tidal Goodies** stats (recently played, most played, top artists/albums,

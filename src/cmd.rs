@@ -695,8 +695,14 @@ pub fn schedule_lyrics_for_track(app: &mut App, track: &Track) {
         return;
     }
     let cache = app.lyrics_cache.clone();
+    // Tidal's lyrics (through goodies) back lrclib up; local tracks are
+    // matched to Tidal on the server. Not while Tidal needs a login.
+    let tidal = (app.goodies.available
+        && app.tidal_login.is_none()
+        && (track.uri.starts_with("tidal:track:") || track.uri.starts_with("local:track:")))
+    .then(|| crate::lyrics::TidalSource { client: app.client.clone(), uri: track.uri.clone() });
     tokio::spawn(async move {
-        let _ = crate::lyrics::fetch_for(&cache, &artist, &title, &album, dur_ms).await;
+        let _ = crate::lyrics::fetch_for(&cache, &artist, &title, &album, dur_ms, tidal).await;
     });
 }
 
